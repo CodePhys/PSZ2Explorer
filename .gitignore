@@ -1,0 +1,19 @@
+# Build
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.cache
+
+# Visual Studio
+.vs/
+*.rsuser
+
+# NuGet
+*.nupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# CSV data (opzionale: rimuovi questa riga se vuoi versionare i dati)
+*.csv
