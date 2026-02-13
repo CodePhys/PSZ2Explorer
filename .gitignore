@@ -17,3 +17,5 @@ artifacts/
 
 # CSV data (opzionale: rimuovi questa riga se vuoi versionare i dati)
 *.csv
+# Eccezione: catalogo in Data/ da versionare per il progetto
+!PSZ2Explorer/PSZ2Explorer/Data/Catalogo.csv

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace PSZ2Explorer
 {
@@ -14,6 +14,9 @@ namespace PSZ2Explorer
 
         // Rapporto segnale/rumore
         public double? Snr { get; set; }
+
+        // Parametro Compton y integrato entro 5 R_500 (osservabile SZ, §3.4.5 tesi)
+        public double? Y5R500 { get; set; }
 
         // Stato di validazione (positivo = ammasso confermato)
         public int? ValidationStatus { get; set; }
