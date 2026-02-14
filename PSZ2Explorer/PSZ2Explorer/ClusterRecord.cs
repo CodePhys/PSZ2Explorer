@@ -23,5 +23,9 @@ namespace PSZ2Explorer
 
         // Flag di appartenenza al campione cosmologico Planck
         public int? CosmologyFlag { get; set; }
+
+        // Coordinate celesti (gradi): per mappa del cielo
+        public double? Ra { get; set; }
+        public double? Dec { get; set; }
     }
 }

@@ -96,6 +96,8 @@ namespace PSZ2Explorer
             int idxMass = Array.IndexOf(colsUpper, "MASS_SZ");
             int idxSnr = Array.IndexOf(colsUpper, "SNR");
             int idxY5 = Array.IndexOf(colsUpper, "Y5R500");  // colonna y5r500 (valori tipici ~0.001–0.05)
+            int idxRa = Array.IndexOf(colsUpper, "RA");
+            int idxDec = Array.IndexOf(colsUpper, "DEC");
             int idxVal = Array.IndexOf(colsUpper, "VALIDATION_STATUS");
             int idxCosmo = Array.IndexOf(colsUpper, "COSMOLOGY_SAMPLE_FLAG");
 
@@ -140,6 +142,8 @@ namespace PSZ2Explorer
                     MassSz = TryParseDouble(idxMass),
                     Snr = TryParseDouble(idxSnr),
                     Y5R500 = TryParseDouble(idxY5),
+                    Ra = TryParseDouble(idxRa),
+                    Dec = TryParseDouble(idxDec),
                     ValidationStatus = TryParseInt(idxVal),
                     CosmologyFlag = TryParseInt(idxCosmo)
                 };
@@ -255,11 +259,12 @@ namespace PSZ2Explorer
                 .Where(c => c.Redshift.HasValue && c.Redshift.Value > 0)
                 .Where(c => c.MassSz.HasValue && c.MassSz.Value > 0);
 
-            // se hai validation_status
+            // validation_status
             sample = sample.Where(c => !c.ValidationStatus.HasValue || c.ValidationStatus.Value > 0);
 
-            // se vuoi usare solo il campione cosmologico:
-            // sample = sample.Where(c => c.CosmologyFlag.HasValue && c.CosmologyFlag.Value == 1);
+            // Solo campione cosmologico (cosmology_sample_flag = 1)
+            if (CosmologyOnlyCheckBox?.IsChecked == true)
+                sample = sample.Where(c => c.CosmologyFlag.HasValue && c.CosmologyFlag.Value == 1);
 
             return sample.ToList();
         }
@@ -288,6 +293,18 @@ namespace PSZ2Explorer
                     break;
                 case "ScatterY5M":
                     PlotY5R500MassScatter();
+                    break;
+                case "ScatterZY5":
+                    PlotRedshiftY5R500Scatter();
+                    break;
+                case "HeatMapMZ":
+                    PlotHeatMapMassRedshift();
+                    break;
+                case "SkyMap":
+                    PlotSkyMapAitoff(colorByRedshift: false);
+                    break;
+                case "SkyMapZ":
+                    PlotSkyMapAitoff(colorByRedshift: true);
                     break;
             }
         }
@@ -417,7 +434,7 @@ namespace PSZ2Explorer
 
             double yMin = yValues.Min();
             double yMax = yValues.Max();
-            // Se i dati sono fuori dal range tipico PSZ2 (0.001–0.05), usa il range reale e avvisa
+            // Range tipico PSZ2: 0.001–0.05. Se dati chiaramente sbagliati (yMax > 0.1) avvisa.
             bool usePhysicalRange = yMin >= HistY5Min && yMax <= HistY5Max;
             double rangeMin = usePhysicalRange ? HistY5Min : yMin;
             double rangeMax = usePhysicalRange ? HistY5Max : Math.Max(yMax, yMin * 1.1);
@@ -428,17 +445,21 @@ namespace PSZ2Explorer
                 "y_{5R500}",
                 rangeMin, rangeMax, HistBinsY5);
 
-            if (!usePhysicalRange)
+            // Avviso solo se valori chiaramente fuori (es. colonna sbagliata: 10, 100, ...)
+            bool clearlyWrong = yMax > 0.1;
+            if (clearlyWrong)
             {
                 var model = PlotView.Model;
                 if (model != null)
                     model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
                     {
-                        Text = "Attenzione: valori fuori range tipico (0,001–0,05).\nVerificare di aver caricato il CSV con colonna 'y5r500' (virgola decimale).",
+                        Text = string.Format(CultureInfo.InvariantCulture,
+                            "Attenzione: valori fuori range tipico (0,001–0,05).\nValori letti come y5r500: min = {0:F0}, max = {1:F0}.\n→ Il file caricato usa probabilmente la VIRGOLA come separatore di colonne.\nUsare il file con PUNTO E VIRGOLA (;) come separatore (es. Catalogo.csv dalla cartella Data, senza riaprirlo da Excel come CSV con virgola).",
+                            yMin, yMax),
                         TextPosition = new DataPoint(rangeMin, 0),
                         TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
                         TextVerticalAlignment = OxyPlot.VerticalAlignment.Top,
-                        FontSize = 10,
+                        FontSize = 9,
                         TextColor = OxyColors.DarkRed
                     });
             }
@@ -567,9 +588,258 @@ namespace PSZ2Explorer
             PlotView.Model = model;
         }
 
+        /// <summary>Redshift vs y5r500: atteso calo del segnale SZ con la distanza. Accetta tutti i y5r500 > 0 per mostrare il grafico anche se CSV ha separatore sbagliato.</summary>
+        private void PlotRedshiftY5R500Scatter()
+        {
+            var points = _filteredClusters
+                .Where(c => c.Redshift.HasValue && c.Redshift.Value > 0 &&
+                            c.Y5R500.HasValue && c.Y5R500.Value > 0)
+                .ToList();
+            if (points.Count == 0)
+            {
+                PlotView.Model = new PlotModel
+                {
+                    Title = "Redshift vs y_{5R500} — Nessun dato (z > 0 e y5r500 > 0). Verificare il CSV."
+                };
+                return;
+            }
+
+            double yMin = points.Min(c => c.Y5R500!.Value);
+            double yMax = points.Max(c => c.Y5R500!.Value);
+            if (yMax <= yMin) yMax = yMin * 1.1;
+            bool inPhysicalRange = yMin >= Y5R500PhysMin && yMax <= Y5R500PhysMax;
+
+            var model = new PlotModel { Title = "Redshift vs y_{5R500}" };
+            model.Axes.Add(new LinearAxis { Position = AxisPosition.Bottom, Title = "z" });
+            model.Axes.Add(new LogarithmicAxis { Position = AxisPosition.Left, Title = "y_{5R500}", Minimum = yMin * 0.9, Maximum = yMax * 1.1 });
+
+            var colorAxis = new OxyPlot.Axes.LinearColorAxis
+            {
+                Position = AxisPosition.Right,
+                Title = "M_{500}^{SZ} [10^{14} M_\\odot]",
+                Key = "MassColor",
+                Minimum = points.Where(c => c.MassSz.HasValue).Select(c => c.MassSz!.Value).DefaultIfEmpty(1).Min(),
+                Maximum = points.Where(c => c.MassSz.HasValue).Select(c => c.MassSz!.Value).DefaultIfEmpty(10).Max(),
+                LowColor = OxyColors.DarkBlue,
+                HighColor = OxyColors.DarkRed
+            };
+            model.Axes.Add(colorAxis);
+
+            var scatter = new ScatterSeries
+            {
+                MarkerType = MarkerType.Circle,
+                MarkerSize = 3,
+                ColorAxisKey = "MassColor",
+                TrackerFormatString = "Nome: {Tag}\nz = {2:0.000}\ny_{5R500} = {4:0.00000}\nM = {6:0.00} ×10^14 M_⊙"
+            };
+            double mMin = colorAxis.Minimum;
+            double mMax = colorAxis.Maximum;
+            if (mMax <= mMin) mMax = mMin + 1;
+            foreach (var c in points)
+            {
+                double z = c.Redshift!.Value;
+                double y = c.Y5R500!.Value;
+                double m = c.MassSz ?? (mMin + mMax) * 0.5;
+                scatter.Points.Add(new ScatterPoint(z, y, 3, m) { Tag = c.Name });
+            }
+            model.Series.Add(scatter);
+            string caption = "Colore = M_500^SZ. Atteso: y diminuisce con z (segnale SZ con distanza).";
+            if (!inPhysicalRange)
+                caption += "\nValori y5r500 fuori range tipico (0,001–0,05): verificare che il CSV usi ; come separatore.";
+            model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
+            {
+                Text = caption,
+                TextPosition = new DataPoint(0, 0),
+                TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
+                TextVerticalAlignment = OxyPlot.VerticalAlignment.Bottom,
+                FontSize = 9,
+                TextColor = OxyColors.Gray
+            });
+            PlotView.Model = model;
+        }
+
+        /// <summary>Heatmap 2D: densità nel piano massa–redshift (binning). Dove si concentrano gli oggetti.</summary>
+        private void PlotHeatMapMassRedshift()
+        {
+            var points = _filteredClusters
+                .Where(c => c.Redshift.HasValue && c.MassSz.HasValue &&
+                            c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
+                .ToList();
+            if (points.Count == 0)
+            {
+                PlotView.Model = new PlotModel { Title = "Heatmap massa–redshift" };
+                return;
+            }
+
+            const int nz = 25;
+            const int nM = 25;
+            double zMin = 0;
+            double zMax = Math.Min(1.0, points.Max(c => c.Redshift!.Value) * 1.01);
+            if (zMax <= zMin) zMax = 0.5;
+            double mMin = ScatterMassMin;
+            double mMax = ScatterMassMax;
+            double dz = (zMax - zMin) / nz;
+            double dm = (mMax - mMin) / nM;
+
+            // HeatMapSeries Data[rows, cols] = Data[Y, X] = Data[nM, nz]
+            var counts = new double[nM, nz];
+            foreach (var c in points)
+            {
+                double z = c.Redshift!.Value;
+                double m = c.MassSz!.Value;
+                if (z < zMin || z > zMax || m < mMin || m > mMax) continue;
+                int iz = (int)((z - zMin) / dz);
+                int im = (int)((m - mMin) / dm);
+                if (iz >= nz) iz = nz - 1;
+                if (im >= nM) im = nM - 1;
+                if (iz >= 0 && im >= 0) counts[im, iz]++;
+            }
+
+            var model = new PlotModel { Title = "Heatmap massa–redshift (densità)" };
+            model.Axes.Add(new LinearAxis { Position = AxisPosition.Bottom, Title = "z", Minimum = zMin, Maximum = zMax });
+            model.Axes.Add(new LogarithmicAxis { Position = AxisPosition.Left, Title = "M_{500}^{SZ} [10^{14} M_\\odot]", Minimum = mMin, Maximum = mMax });
+
+            var heatMap = new HeatMapSeries
+            {
+                X0 = zMin,
+                X1 = zMax,
+                Y0 = mMin,
+                Y1 = mMax,
+                Data = counts,
+                Interpolate = false,
+                RenderMethod = HeatMapRenderMethod.Rectangles
+            };
+            model.Series.Add(heatMap);
+            model.Axes.Add(new OxyPlot.Axes.LinearColorAxis
+            {
+                Position = AxisPosition.Right,
+                Title = "N",
+                Palette = OxyPlot.OxyPalettes.Viridis(256)
+            });
+            PlotView.Model = model;
+        }
+
+        /// <summary>Mappa celeste: Aitoff (RA, Dec). Colore = massa oppure redshift (vista RA-Dec-z con OxyPlot 2D).</summary>
+        private void PlotSkyMapAitoff(bool colorByRedshift)
+        {
+            var points = _filteredClusters
+                .Where(c => c.Ra.HasValue && c.Dec.HasValue)
+                .ToList();
+            if (colorByRedshift)
+                points = points.Where(c => c.Redshift.HasValue && c.Redshift.Value > 0).ToList();
+            if (points.Count == 0)
+            {
+                PlotView.Model = new PlotModel
+                {
+                    Title = "Mappa celeste — Nessun dato con RA/Dec" + (colorByRedshift ? " e redshift" : "") + ". Verificare il CSV."
+                };
+                return;
+            }
+
+            const double deg2rad = Math.PI / 180.0;
+            double mMin = points.Where(c => c.MassSz.HasValue).Select(c => c.MassSz!.Value).DefaultIfEmpty(1).Min();
+            double mMax = points.Where(c => c.MassSz.HasValue).Select(c => c.MassSz!.Value).DefaultIfEmpty(10).Max();
+            if (mMax <= mMin) mMax = mMin + 1;
+
+            double zMin = 0.0;
+            double zMax = 1.0;
+            if (colorByRedshift)
+            {
+                zMin = points.Where(c => c.Redshift.HasValue).Select(c => c.Redshift!.Value).DefaultIfEmpty(0).Min();
+                zMax = points.Where(c => c.Redshift.HasValue).Select(c => c.Redshift!.Value).DefaultIfEmpty(0.5).Max();
+                if (zMax <= zMin) zMax = zMin + 0.1;
+            }
+
+            string title = colorByRedshift ? "Mappa RA–Dec–z (Aitoff, colore = redshift)" : "Mappa celeste (Aitoff) — cluster PSZ2";
+            if (CosmologyOnlyCheckBox?.IsChecked == true)
+                title += " — solo campione cosmologico";
+            var model = new PlotModel { Title = title };
+
+            model.Axes.Add(new LinearAxis
+            {
+                Position = AxisPosition.Bottom,
+                Title = "Aitoff x",
+                Minimum = -2.05,
+                Maximum = 2.05
+            });
+            model.Axes.Add(new LinearAxis
+            {
+                Position = AxisPosition.Left,
+                Title = "Aitoff y",
+                Minimum = -1.05,
+                Maximum = 1.05
+            });
+
+            var colorAxis = new OxyPlot.Axes.LinearColorAxis
+            {
+                Position = AxisPosition.Right,
+                Title = colorByRedshift ? "z (redshift)" : "M_{500}^{SZ} [10^{14} M_\\odot]",
+                Key = "MassColor",
+                Minimum = colorByRedshift ? zMin : mMin,
+                Maximum = colorByRedshift ? zMax : mMax,
+                LowColor = OxyColors.DarkBlue,
+                HighColor = OxyColors.DarkRed
+            };
+            model.Axes.Add(colorAxis);
+
+            double sizeMin = 1.2;
+            double sizeMax = 5.5;
+            double massRange = mMax - mMin;
+            if (massRange < 1e-6) massRange = 1;
+
+            var scatter = new ScatterSeries
+            {
+                MarkerType = MarkerType.Circle,
+                ColorAxisKey = "MassColor",
+                TrackerFormatString = colorByRedshift
+                    ? "Nome: {Tag}\nAitoff (x,y) = ({2:0.2f}, {4:0.2f})\nz = {6:0.3f} (colore). Dimensione ∝ M_500^SZ."
+                    : "Nome: {Tag}\nAitoff (x,y) = ({2:0.2f}, {4:0.2f})\nM_500^SZ = {6:0.00} × 10^14 M_⊙"
+            };
+
+            foreach (var c in points)
+            {
+                double raDeg = c.Ra!.Value;
+                double decDeg = c.Dec!.Value;
+                double lon = (raDeg - 180.0) * deg2rad;
+                double lat = decDeg * deg2rad;
+                double cosLat = Math.Cos(lat);
+                double cosHalfLon = Math.Cos(lon * 0.5);
+                double alpha = Math.Acos(Math.Max(-1, Math.Min(1, cosLat * cosHalfLon)));
+                double sinc = (Math.Abs(alpha) < 1e-10) ? 1.0 : (Math.Sin(alpha) / alpha);
+                double x = 2.0 * cosLat * Math.Sin(lon * 0.5) / sinc;
+                double y = Math.Sin(lat) / sinc;
+                double mass = c.MassSz ?? (mMin + mMax) * 0.5;
+                double size = sizeMin + (sizeMax - sizeMin) * (mass - mMin) / massRange;
+                double colorValue = colorByRedshift ? (c.Redshift ?? (zMin + zMax) * 0.5) : mass;
+                scatter.Points.Add(new ScatterPoint(x, y, size, colorValue) { Tag = c.Name });
+            }
+
+            model.Series.Add(scatter);
+
+            string caption = colorByRedshift
+                ? "Vista RA–Dec–z: posizione = cielo (Aitoff), colore = redshift (distanza). Size ∝ massa.\nUtile per allineamenti e struttura a grande scala."
+                : "Punti più grandi = cluster più massicci. Colore = M_500^SZ.\nDistribuzione angolare; assenza di copertura = maschera galattica Planck.";
+            model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
+            {
+                Text = caption,
+                TextPosition = new DataPoint(-2, -0.95),
+                TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
+                TextVerticalAlignment = OxyPlot.VerticalAlignment.Bottom,
+                FontSize = 9,
+                TextColor = OxyColors.Gray
+            });
+
+            PlotView.Model = model;
+        }
+
         private void SnrMinTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
         {
-            // evitiamo di esplodere se il CSV non è ancora stato caricato
+            if (_allClusters.Count > 0)
+                ApplyFiltersAndUpdatePlot();
+        }
+
+        private void CosmologyOnlyCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
             if (_allClusters.Count > 0)
                 ApplyFiltersAndUpdatePlot();
         }

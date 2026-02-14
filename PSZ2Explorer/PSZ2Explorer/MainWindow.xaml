@@ -22,11 +22,19 @@
                 <ComboBoxItem Content="Istogramma SNR" Tag="HistSnr"/>
                 <ComboBoxItem Content="Istogramma y5r500" Tag="HistY5"/>
                 <ComboBoxItem Content="y5r500 vs Massa" Tag="ScatterY5M"/>
+                <ComboBoxItem Content="Redshift vs y5r500" Tag="ScatterZY5"/>
+                <ComboBoxItem Content="Heatmap massa–redshift" Tag="HeatMapMZ"/>
+                <ComboBoxItem Content="Mappa celeste (Aitoff)" Tag="SkyMap"/>
+                <ComboBoxItem Content="Mappa RA–Dec–z (colore = z)" Tag="SkyMapZ"/>
             </ComboBox>
 
             <TextBlock Text="  SNR min:" VerticalAlignment="Center" Margin="20 0 5 0"/>
             <TextBox x:Name="SnrMinTextBox" Width="50" Text="6"
                      TextChanged="SnrMinTextBox_TextChanged"/>
+
+            <CheckBox x:Name="CosmologyOnlyCheckBox" Content="Solo campione cosmologico"
+                      VerticalAlignment="Center" Margin="15 0 0 0"
+                      Checked="CosmologyOnlyCheckBox_Changed" Unchecked="CosmologyOnlyCheckBox_Changed"/>
 
             <TextBlock x:Name="SampleInfoTextBlock"
                        Margin="20 0 0 0"
