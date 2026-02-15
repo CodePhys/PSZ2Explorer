@@ -1,0 +1,33 @@
+PSZ2 Explorer – Licenza (Uso libero con attribuzione)
+====================================================
+
+Il presente software e il relativo codice sorgente sono forniti "così come sono"
+e possono essere utilizzati, copiati, modificati e ridistribuiti liberamente da
+chiunque, senza obbligo di permesso preventivo, a condizione che siano rispettate
+le seguenti clausole di attribuzione.
+
+1. CREDITO ALL'AUTORE
+   In ogni utilizzo, distribuzione, opera derivata o pubblicazione che faccia
+   uso di questo software (o di sue parti) deve essere indicato in modo chiaro
+   e visibile il credito all'autore originale del progetto PSZ2 Explorer
+   (es. nel README, nelle note del programma, in una sezione "Crediti" o in
+   nota a piè di pagina).
+
+2. CREDITO AI DATI
+   Quando si utilizzano o si citano risultati, grafici o analisi basati sui
+   cataloghi supportati dall'applicazione (PSZ2/Planck, ACT DR5, eROSITA),
+   devono essere riportati i riferimenti appropriati alle fonti dei dati e ai
+   cataloghi, come indicato nel README del repository e, ove applicabile, nel
+   file Data/RIEPILOGO_COLONNE_E_PARAMETRI_TESI.md. Non è consentito presentare
+   i dati come propri senza citare le fonti originali.
+
+3. DIVIETI
+   Non è consentito rivendicare la paternità del lavoro altrui né rimuovere o
+   occultare i crediti all'autore o alle fonti dati dove già presenti.
+
+4. GARANZIE
+   Il software è fornito senza garanzie di alcun tipo; l'autore non è responsabile
+   per danni diretti o indiretti derivanti dall'uso del software o dei dati.
+
+In sintesi: uso libero per tutti, con obbligo di indicare l'autore del software
+e i crediti per i dati utilizzati.

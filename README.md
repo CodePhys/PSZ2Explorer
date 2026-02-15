@@ -104,4 +104,11 @@ Per **dettaglio completo delle colonne, unità e parametri** (adatto a tesi o re
 
 ## Licenza
 
-Da definire dall’autore del repository.
+**Uso libero con attribuzione**
+
+Questo progetto e il suo codice possono essere **usati liberamente da chiunque** (studio, didattica, ricerca, uso personale o derivato), a condizione che:
+
+1. **Credito all’autore** — In ogni utilizzo, distribuzione o lavoro derivato venga indicato in modo chiaro l’autore originale del software (es. nel README, nelle note del programma o in una sezione “Crediti”).
+2. **Credito ai dati** — Quando si utilizzano o si citano risultati basati sui cataloghi integrati nell’applicazione, vengano riportati i riferimenti appropriati ai dati (Planck/PSZ2, ACT DR5, eROSITA) come indicato nella sezione **Riferimenti** di questo README e, se applicabile, nel file `Data/RIEPILOGO_COLONNE_E_PARAMETRI_TESI.md`.
+
+Non è richiesta alcuna autorizzazione preventiva; non è consentito rivendicare paternità del lavoro altrui né rimuovere i crediti dove già presenti.
