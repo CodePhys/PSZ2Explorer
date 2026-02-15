@@ -18,6 +18,8 @@ namespace PSZ2Explorer
         private List<ClusterRecord> _filteredClusters = new();
         private List<ClusterRecord> _overlayClusters = new();
         private string? _overlayFilePath;
+        private List<ClusterRecord> _overlayClusters2 = new();
+        private string? _overlayFilePath2;
 
         // Binning e range fissi: grafici confrontabili al variare di SNR min (per tesi)
         private const int HistBinsZ = 25;
@@ -43,6 +45,9 @@ namespace PSZ2Explorer
         // Range massa fisico per scatter M-z (unità 10^14 M_sun). Esclude outlier da colonna/unità errate.
         private const double ScatterMassMin = 0.1;
         private const double ScatterMassMax = 50;
+
+        /// <summary>Numero massimo di punti overlay 2 (es. eROSITA) nel grafico M–z per mantenere leggibilità.</summary>
+        private const int MaxOverlay2DisplayPoints = 600;
 
         // y5r500: range fisico tipico (PSZ2) ~0.001–0.05. Valori >0.2 o <1e-6 indicano colonna/CSV errati.
         private const double Y5R500PhysMin = 1e-6;
@@ -97,6 +102,42 @@ namespace PSZ2Explorer
             {
                 MessageBox.Show("Errore nel caricamento overlay: " + ex.Message);
             }
+        }
+
+        private void LoadOverlay2_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new OpenFileDialog
+            {
+                Filter = "CSV/TSV (*.csv;*.tsv)|*.csv;*.tsv|Tutti i file (*.*)|*.*",
+                Title = "Carica terzo catalogo (overlay 2, es. eROSITA)"
+            };
+
+            if (dlg.ShowDialog() != true)
+                return;
+
+            try
+            {
+                _overlayClusters2 = LoadClustersFromCsv(dlg.FileName);
+                _overlayFilePath2 = dlg.FileName;
+                if (FindName("Overlay2Label") is System.Windows.Controls.TextBlock tb)
+                    tb.Text = System.IO.Path.GetFileName(_overlayFilePath2);
+                ApplyFiltersAndUpdatePlot();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Errore nel caricamento overlay 2: " + ex.Message);
+            }
+        }
+
+        private static string GetOverlayTitle(string? filePath, string fallback)
+        {
+            if (string.IsNullOrEmpty(filePath)) return fallback;
+            string fname = Path.GetFileNameWithoutExtension(filePath);
+            if (fname.Contains("asu", StringComparison.OrdinalIgnoreCase) || fname.Contains("erosita", StringComparison.OrdinalIgnoreCase))
+                return "eROSITA";
+            if (fname.Contains("act", StringComparison.OrdinalIgnoreCase))
+                return "ACT-DR5";
+            return string.IsNullOrEmpty(fname) ? fallback : fname;
         }
 
         /// <summary>Converte RA in formato sessagesimale (hh mm ss o hh mm ss.ss) in gradi decimali.</summary>
@@ -453,15 +494,20 @@ namespace PSZ2Explorer
                             c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
                 .ToList();
 
-            // Stesso taglio SNR per overlay (es. ACT): confronto omogeneo
+            // Stesso taglio SNR per entrambi gli overlay: confronto omogeneo
             var overlayPoints = _overlayClusters
                 .Where(c => c.Snr.HasValue && c.Snr.Value >= snrMin)
                 .Where(c => c.Redshift.HasValue && c.Redshift.Value > 0 && c.MassSz.HasValue &&
                             c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
                 .ToList();
 
-            // "Confrontabile": limita l'overlay allo stesso range (z, M) del catalogo principale
-            // così i due campioni sono paragonabili nella stessa regione del piano M-z
+            var overlayPoints2 = _overlayClusters2
+                .Where(c => c.Snr.HasValue && c.Snr.Value >= snrMin)
+                .Where(c => c.Redshift.HasValue && c.Redshift.Value > 0 && c.MassSz.HasValue &&
+                            c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
+                .ToList();
+
+            // "Confrontabile": limita gli overlay allo stesso range (z, M) del catalogo principale
             bool comparable = ComparableOverlayCheckBox?.IsChecked == true && points.Count > 0;
             if (comparable)
             {
@@ -473,9 +519,21 @@ namespace PSZ2Explorer
                     .Where(c => c.Redshift!.Value >= psz2ZMin && c.Redshift.Value <= psz2ZMax &&
                                 c.MassSz!.Value >= psz2MMin && c.MassSz.Value <= psz2MMax)
                     .ToList();
+                overlayPoints2 = overlayPoints2
+                    .Where(c => c.Redshift!.Value >= psz2ZMin && c.Redshift.Value <= psz2ZMax &&
+                                c.MassSz!.Value >= psz2MMin && c.MassSz.Value <= psz2MMax)
+                    .ToList();
             }
 
-            if (points.Count == 0 && overlayPoints.Count == 0)
+            // Solo i cataloghi con checkbox attivo vengono mostrati
+            bool showPsz2 = ShowPsz2CheckBox?.IsChecked == true;
+            bool showO1 = ShowOverlay1CheckBox?.IsChecked == true;
+            bool showO2 = ShowOverlay2CheckBox?.IsChecked == true;
+            var visiblePts = showPsz2 ? points : new List<ClusterRecord>();
+            var visibleOverlay = showO1 ? overlayPoints : new List<ClusterRecord>();
+            var visibleOverlay2 = showO2 ? overlayPoints2 : new List<ClusterRecord>();
+
+            if (visiblePts.Count == 0 && visibleOverlay.Count == 0 && visibleOverlay2.Count == 0)
             {
                 PlotView.Model = new PlotModel { Title = "Massa SZ vs redshift" };
                 return;
@@ -483,31 +541,43 @@ namespace PSZ2Explorer
 
             double mMin = double.MaxValue;
             double mMax = double.MinValue;
-            if (points.Count > 0)
+            if (visiblePts.Count > 0)
             {
-                mMin = Math.Min(mMin, points.Min(c => c.MassSz!.Value));
-                mMax = Math.Max(mMax, points.Max(c => c.MassSz!.Value));
+                mMin = Math.Min(mMin, visiblePts.Min(c => c.MassSz!.Value));
+                mMax = Math.Max(mMax, visiblePts.Max(c => c.MassSz!.Value));
             }
-            if (overlayPoints.Count > 0)
+            if (visibleOverlay.Count > 0)
             {
-                mMin = Math.Min(mMin, overlayPoints.Min(c => c.MassSz!.Value));
-                mMax = Math.Max(mMax, overlayPoints.Max(c => c.MassSz!.Value));
+                mMin = Math.Min(mMin, visibleOverlay.Min(c => c.MassSz!.Value));
+                mMax = Math.Max(mMax, visibleOverlay.Max(c => c.MassSz!.Value));
+            }
+            if (visibleOverlay2.Count > 0)
+            {
+                mMin = Math.Min(mMin, visibleOverlay2.Min(c => c.MassSz!.Value));
+                mMax = Math.Max(mMax, visibleOverlay2.Max(c => c.MassSz!.Value));
             }
             if (mMax <= mMin) mMax = mMin + 0.1;
 
             double zMin = 0;
             double zMax = 0.5;
-            if (points.Count > 0)
+            if (visiblePts.Count > 0)
             {
-                zMin = points.Min(c => c.Redshift!.Value);
-                zMax = points.Max(c => c.Redshift!.Value);
+                zMin = visiblePts.Min(c => c.Redshift!.Value);
+                zMax = visiblePts.Max(c => c.Redshift!.Value);
             }
-            if (overlayPoints.Count > 0)
+            if (visibleOverlay.Count > 0)
             {
-                double ozMin = overlayPoints.Min(c => c.Redshift!.Value);
-                double ozMax = overlayPoints.Max(c => c.Redshift!.Value);
-                zMin = points.Count > 0 ? Math.Min(zMin, ozMin) : ozMin;
-                zMax = points.Count > 0 ? Math.Max(zMax, ozMax) : ozMax;
+                double ozMin = visibleOverlay.Min(c => c.Redshift!.Value);
+                double ozMax = visibleOverlay.Max(c => c.Redshift!.Value);
+                zMin = visiblePts.Count > 0 ? Math.Min(zMin, ozMin) : ozMin;
+                zMax = visiblePts.Count > 0 ? Math.Max(zMax, ozMax) : ozMax;
+            }
+            if (visibleOverlay2.Count > 0)
+            {
+                double o2zMin = visibleOverlay2.Min(c => c.Redshift!.Value);
+                double o2zMax = visibleOverlay2.Max(c => c.Redshift!.Value);
+                zMin = (visiblePts.Count > 0 || visibleOverlay.Count > 0) ? Math.Min(zMin, o2zMin) : o2zMin;
+                zMax = (visiblePts.Count > 0 || visibleOverlay.Count > 0) ? Math.Max(zMax, o2zMax) : o2zMax;
             }
             if (zMax <= zMin) zMax = zMin + 0.1;
 
@@ -528,22 +598,50 @@ namespace PSZ2Explorer
             model.Axes.Add(new LogarithmicAxis
             {
                 Position = AxisPosition.Left,
-                Title = "M_{500} [10^{14} M_\\odot]"
+                Title = "M_{500} [10^{14} M\u2609]",
+                TitleFontSize = 14
             });
 
-            // Nome leggibile per overlay (es. asu.tsv → eROSITA)
-            string overlayTitle = "Secondo catalogo";
-            if (!string.IsNullOrEmpty(_overlayFilePath))
+            // Nomi leggibili per overlay (es. asu.tsv → eROSITA, ACT file → ACT)
+            string overlayTitle = GetOverlayTitle(_overlayFilePath, "Overlay 1");
+            string overlay2Title = GetOverlayTitle(_overlayFilePath2, "Overlay 2");
+
+            // Overlay 2 (es. eROSITA): al massimo MaxOverlay2DisplayPoints per grafico leggibile; marker più piccoli
+            List<ClusterRecord> toDrawO2 = visibleOverlay2;
+            if (visibleOverlay2.Count > MaxOverlay2DisplayPoints)
             {
-                string fname = System.IO.Path.GetFileNameWithoutExtension(_overlayFilePath);
-                if (fname.Contains("asu", StringComparison.OrdinalIgnoreCase) || fname.Contains("erosita", StringComparison.OrdinalIgnoreCase))
-                    overlayTitle = "eROSITA";
-                else
-                    overlayTitle = fname;
+                double step = (double)visibleOverlay2.Count / MaxOverlay2DisplayPoints;
+                toDrawO2 = new List<ClusterRecord>();
+                for (int i = 0; i < MaxOverlay2DisplayPoints; i++)
+                {
+                    int idx = Math.Min((int)(i * step), visibleOverlay2.Count - 1);
+                    toDrawO2.Add(visibleOverlay2[idx]);
+                }
+            }
+            if (toDrawO2.Count > 0)
+            {
+                var scatterOverlay2 = new ScatterSeries
+                {
+                    Title = overlay2Title + (visibleOverlay2.Count > MaxOverlay2DisplayPoints
+                        ? string.Format(CultureInfo.InvariantCulture, " (n={0}, mostrati {1})", visibleOverlay2.Count, toDrawO2.Count)
+                        : ""),
+                    MarkerType = MarkerType.Square,
+                    MarkerSize = 3,
+                    MarkerFill = OxyColors.DarkGreen,
+                    MarkerStroke = OxyColors.White,
+                    MarkerStrokeThickness = 0.5,
+                    TrackerFormatString = "{0}\nNome: {Tag}\nz = {2:0.000}\nM_500 = {4:0.00} × 10^14 M_⊙"
+                };
+                foreach (var c in toDrawO2)
+                {
+                    double z = c.Redshift!.Value;
+                    double m = c.MassSz!.Value;
+                    scatterOverlay2.Points.Add(new ScatterPoint(z, m) { Tag = c.Name });
+                }
+                model.Series.Add(scatterOverlay2);
             }
 
-            // Disegno prima overlay, poi PSZ2: così dove si sovrappongono i cerchi PSZ2 restano visibili sopra
-            if (overlayPoints.Count > 0)
+            if (visibleOverlay.Count > 0)
             {
                 var scatterOverlay = new ScatterSeries
                 {
@@ -555,7 +653,7 @@ namespace PSZ2Explorer
                     MarkerStrokeThickness = 0.8,
                     TrackerFormatString = "{0}\nNome: {Tag}\nz = {2:0.000}\nM_500 = {4:0.00} × 10^14 M_⊙"
                 };
-                foreach (var c in overlayPoints)
+                foreach (var c in visibleOverlay)
                 {
                     double z = c.Redshift!.Value;
                     double m = c.MassSz!.Value;
@@ -564,7 +662,7 @@ namespace PSZ2Explorer
                 model.Series.Add(scatterOverlay);
             }
 
-            if (points.Count > 0)
+            if (visiblePts.Count > 0)
             {
                 var scatterPsz2 = new ScatterSeries
                 {
@@ -576,7 +674,7 @@ namespace PSZ2Explorer
                     MarkerStrokeThickness = 0.8,
                     TrackerFormatString = "{0}\nNome: {Tag}\nz = {2:0.000}\nM_500 = {4:0.00} × 10^14 M_⊙"
                 };
-                foreach (var c in points)
+                foreach (var c in visiblePts)
                 {
                     double z = c.Redshift!.Value;
                     double m = c.MassSz!.Value;
@@ -585,50 +683,65 @@ namespace PSZ2Explorer
                 model.Series.Add(scatterPsz2);
             }
 
-            // Legenda dentro il grafico: testo colorato come il catalogo (PSZ2 = blu, overlay = arancione)
-            double zLeg = zMin + (zMax - zMin) * 0.72;
+            // Legenda sul bordo destro in alto: nomi cataloghi con simbolo e colore
+            double zLegRight = zMin + (zMax - zMin) * 0.98;
             double logMmin = Math.Log10(mMin);
             double logMmax = Math.Log10(mMax);
-            double mLeg1 = Math.Pow(10, logMmin + (logMmax - logMmin) * 0.88);
-            double mLeg2 = Math.Pow(10, logMmin + (logMmax - logMmin) * 0.78);
+            double mLeg1 = Math.Pow(10, logMmin + (logMmax - logMmin) * 0.92);
+            double mLeg2 = Math.Pow(10, logMmin + (logMmax - logMmin) * 0.82);
+            double mLeg3 = Math.Pow(10, logMmin + (logMmax - logMmin) * 0.72);
 
-            if (points.Count > 0)
+            if (visiblePts.Count > 0)
             {
                 model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
                 {
                     Text = "● PSZ2",
-                    TextPosition = new DataPoint(zLeg, mLeg1),
+                    TextPosition = new DataPoint(zLegRight, mLeg1),
                     TextColor = OxyColors.DarkBlue,
                     FontSize = 12,
                     FontWeight = 600,
-                    TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
+                    TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Right,
                     TextVerticalAlignment = OxyPlot.VerticalAlignment.Middle
                 });
             }
-            if (overlayPoints.Count > 0)
+            if (visibleOverlay.Count > 0)
             {
                 model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
                 {
                     Text = "▲ " + overlayTitle,
-                    TextPosition = new DataPoint(zLeg, mLeg2),
+                    TextPosition = new DataPoint(zLegRight, mLeg2),
                     TextColor = OxyColors.DarkOrange,
                     FontSize = 12,
                     FontWeight = 600,
-                    TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
+                    TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Right,
+                    TextVerticalAlignment = OxyPlot.VerticalAlignment.Middle
+                });
+            }
+            if (toDrawO2.Count > 0)
+            {
+                model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
+                {
+                    Text = "■ " + overlay2Title,
+                    TextPosition = new DataPoint(zLegRight, mLeg3),
+                    TextColor = OxyColors.DarkGreen,
+                    FontSize = 12,
+                    FontWeight = 600,
+                    TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Right,
                     TextVerticalAlignment = OxyPlot.VerticalAlignment.Middle
                 });
             }
 
             // In modalità confrontabile: annotazione con conteggi e range per citazione in tesi
-            if (comparable && (points.Count > 0 || overlayPoints.Count > 0))
+            if (comparable && (points.Count > 0 || overlayPoints.Count > 0 || overlayPoints2.Count > 0))
             {
                 double psz2ZMin = points.Count > 0 ? points.Min(c => c.Redshift!.Value) : 0;
                 double psz2ZMax = points.Count > 0 ? points.Max(c => c.Redshift!.Value) : 0;
                 double psz2MMin = points.Count > 0 ? points.Min(c => c.MassSz!.Value) : 0;
                 double psz2MMax = points.Count > 0 ? points.Max(c => c.MassSz!.Value) : 0;
                 string rangeText = string.Format(CultureInfo.InvariantCulture,
-                    "N_PSZ2 = {0},  N_{1} = {2}   |   z in [{3:F2}, {4:F2}],  M500 in [{5:F2}, {6:F2}] x10^14 Msun",
-                    points.Count, overlayTitle, overlayPoints.Count, psz2ZMin, psz2ZMax, psz2MMin, psz2MMax);
+                    "N_PSZ2 = {0},  N_{1} = {2},  N_{3} = {4}   |   z in [{5:F2}, {6:F2}],  M500 in [{7:F2}, {8:F2}] x10^14 Msun",
+                    points.Count, overlayTitle, overlayPoints.Count, overlay2Title, overlayPoints2.Count,
+                    psz2ZMin, psz2ZMax, psz2MMin, psz2MMax);
                 double mLeg0 = Math.Pow(10, logMmin + (logMmax - logMmin) * 0.02);
                 model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
                 {
@@ -1091,6 +1204,11 @@ namespace PSZ2Explorer
         }
 
         private void ComparableOverlayCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            UpdatePlot();
+        }
+
+        private void ShowCatalog_Changed(object sender, RoutedEventArgs e)
         {
             UpdatePlot();
         }

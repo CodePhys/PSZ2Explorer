@@ -27,11 +27,16 @@
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Carica catalogo..." Click="LoadCsv_Click" Padding="12 6" MinWidth="120"
                                     Cursor="Hand" FontWeight="SemiBold"/>
-                            <Button Content="Carica overlay..." Click="LoadOverlay_Click" Padding="12 6" MinWidth="110" Margin="8 0 0 0"
-                                    ToolTip="Secondo catalogo (es. eROSITA, ACT) per Massa vs redshift"
+                            <Button Content="Overlay 1 (es. ACT)..." Click="LoadOverlay_Click" Padding="12 6" MinWidth="110" Margin="8 0 0 0"
+                                    ToolTip="Secondo catalogo (es. ACT DR5) per Massa vs redshift"
                                     Cursor="Hand"/>
-                            <TextBlock x:Name="OverlayLabel" Text="" VerticalAlignment="Center" Margin="10 0 0 0"
-                                       Foreground="#607D8B" FontSize="12" FontStyle="Italic"/>
+                            <TextBlock x:Name="OverlayLabel" Text="" VerticalAlignment="Center" Margin="6 0 0 0"
+                                       Foreground="#E65100" FontSize="11" FontStyle="Italic"/>
+                            <Button Content="Overlay 2 (es. eROSITA)..." Click="LoadOverlay2_Click" Padding="12 6" MinWidth="120" Margin="12 0 0 0"
+                                    ToolTip="Terzo catalogo (es. eROSITA) per Massa vs redshift"
+                                    Cursor="Hand"/>
+                            <TextBlock x:Name="Overlay2Label" Text="" VerticalAlignment="Center" Margin="6 0 0 0"
+                                       Foreground="#2E7D32" FontSize="11" FontStyle="Italic"/>
                         </StackPanel>
                     </Border>
 
@@ -80,6 +85,20 @@
                               Foreground="#37474F"
                               ToolTip="Overlay limitato allo stesso intervallo z e M del catalogo principale"
                               Checked="ComparableOverlayCheckBox_Changed" Unchecked="ComparableOverlayCheckBox_Changed"/>
+
+                    <Rectangle Width="1" Fill="#E0E0E0" Margin="16 2 12 2"/>
+
+                    <TextBlock Text="In grafico M–z:" VerticalAlignment="Center" Margin="0 0 8 0"
+                               Foreground="#546E7A" FontSize="11"/>
+                    <CheckBox x:Name="ShowPsz2CheckBox" Content="PSZ2" IsChecked="True"
+                              VerticalAlignment="Center" Margin="0 0 12 0" Foreground="#1565C0"
+                              Checked="ShowCatalog_Changed" Unchecked="ShowCatalog_Changed"/>
+                    <CheckBox x:Name="ShowOverlay1CheckBox" Content="Overlay 1" IsChecked="True"
+                              VerticalAlignment="Center" Margin="0 0 12 0" Foreground="#E65100"
+                              Checked="ShowCatalog_Changed" Unchecked="ShowCatalog_Changed"/>
+                    <CheckBox x:Name="ShowOverlay2CheckBox" Content="Overlay 2" IsChecked="True"
+                              VerticalAlignment="Center" Margin="0 0 0 0" Foreground="#2E7D32"
+                              Checked="ShowCatalog_Changed" Unchecked="ShowCatalog_Changed"/>
 
                     <TextBlock x:Name="SampleInfoTextBlock" Margin="24 0 0 0" VerticalAlignment="Center"
                                Foreground="#455A64" FontWeight="SemiBold"/>
