@@ -16,6 +16,8 @@ namespace PSZ2Explorer
     {
         private List<ClusterRecord> _allClusters = new();
         private List<ClusterRecord> _filteredClusters = new();
+        private List<ClusterRecord> _overlayClusters = new();
+        private string? _overlayFilePath;
 
         // Binning e range fissi: grafici confrontabili al variare di SNR min (per tesi)
         private const int HistBinsZ = 25;
@@ -55,7 +57,7 @@ namespace PSZ2Explorer
         {
             var dlg = new OpenFileDialog
             {
-                Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*"
+                Filter = "CSV/TSV (*.csv;*.tsv)|*.csv;*.tsv|Tutti i file (*.*)|*.*"
             };
 
             if (dlg.ShowDialog() != true)
@@ -72,18 +74,80 @@ namespace PSZ2Explorer
             }
         }
 
+        private void LoadOverlay_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new OpenFileDialog
+            {
+                Filter = "CSV/TSV (*.csv;*.tsv)|*.csv;*.tsv|Tutti i file (*.*)|*.*",
+                Title = "Carica secondo catalogo (overlay)"
+            };
+
+            if (dlg.ShowDialog() != true)
+                return;
+
+            try
+            {
+                _overlayClusters = LoadClustersFromCsv(dlg.FileName);
+                _overlayFilePath = dlg.FileName;
+                if (FindName("OverlayLabel") is System.Windows.Controls.TextBlock overlayTb)
+                    overlayTb.Text = System.IO.Path.GetFileName(_overlayFilePath);
+                ApplyFiltersAndUpdatePlot();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Errore nel caricamento overlay: " + ex.Message);
+            }
+        }
+
+        /// <summary>Converte RA in formato sessagesimale (hh mm ss o hh mm ss.ss) in gradi decimali.</summary>
+        private static double? ParseSexagesimalRa(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            var tokens = s.Trim().Split((char[])null!, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length < 3) return null;
+            if (!double.TryParse(tokens[0], NumberStyles.Any, CultureInfo.InvariantCulture, out var h)) return null;
+            if (!double.TryParse(tokens[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var m)) return null;
+            if (!double.TryParse(tokens[2], NumberStyles.Any, CultureInfo.InvariantCulture, out var sec)) return null;
+            return 15.0 * (h + m / 60.0 + sec / 3600.0);  // ore -> gradi
+        }
+
+        /// <summary>Converte Dec in formato sessagesimale (dd mm ss con segno) in gradi decimali.</summary>
+        private static double? ParseSexagesimalDec(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            var tokens = s.Trim().Split((char[])null!, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length < 3) return null;
+            if (!double.TryParse(tokens[0], NumberStyles.Any, CultureInfo.InvariantCulture, out var d)) return null;
+            if (!double.TryParse(tokens[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var m)) return null;
+            if (!double.TryParse(tokens[2], NumberStyles.Any, CultureInfo.InvariantCulture, out var sec)) return null;
+            int sign = d >= 0 ? 1 : -1;
+            return sign * (Math.Abs(d) + m / 60.0 + sec / 3600.0);
+        }
+
         private List<ClusterRecord> LoadClustersFromCsv(string path)
         {
             var list = new List<ClusterRecord>();
             // Encoding UTF-8 senza BOM per allineamento colonne (ESA usa ; e virgola decimale)
             using var reader = new StreamReader(path, System.Text.Encoding.UTF8);
 
-            string? header = reader.ReadLine();
+            // Salta righe di commento o intestazione HEASARC (es. "Results from...", "Coordinate system...")
+            string? header = null;
+            while (!reader.EndOfStream)
+            {
+                var line = reader.ReadLine();
+                if (line == null || string.IsNullOrWhiteSpace(line)) continue;
+                var t = line.TrimStart();
+                if (t.StartsWith("#", StringComparison.Ordinal)) continue;
+                if (t.StartsWith("Results from", StringComparison.OrdinalIgnoreCase)) continue;
+                if (t.StartsWith("Coordinate system", StringComparison.OrdinalIgnoreCase)) continue;
+                header = line;
+                break;
+            }
             if (header == null)
                 return list;
 
-            // Assumo separatore ';' – cambia se necessario
-            char sep = header.Contains(";") ? ';' : ',';
+            // Separatore: | (HEASARC pipe table), ; o ,
+            char sep = header.Contains("|") ? '|' : (header.Contains(";") ? ';' : ',');
             var columns = header.Split(sep);
             for (int i = 0; i < columns.Length; i++)
                 columns[i] = columns[i].Trim();
@@ -100,9 +164,18 @@ namespace PSZ2Explorer
             int idxDec = Array.IndexOf(colsUpper, "DEC");
             int idxVal = Array.IndexOf(colsUpper, "VALIDATION_STATUS");
             int idxCosmo = Array.IndexOf(colsUpper, "COSMOLOGY_SAMPLE_FLAG");
+            // Colonne catalogo eROSITA (VizieR / Bulbul+ 2024)
+            int idxRAJ2000 = Array.IndexOf(colsUpper, "RAJ2000");
+            int idxDEJ2000 = Array.IndexOf(colsUpper, "DEJ2000");
+            int idxZBest = Array.IndexOf(colsUpper, "ZBEST");
+            int idxM500 = Array.IndexOf(colsUpper, "M500");  // massa in 10^13 M_sun → convertiamo in 10^14
+            // Colonne HEASARC / ACT-DR5 (mass_500c già in 10^14 M_sun)
+            int idxMass500c = Array.IndexOf(colsUpper, "MASS_500C");
+            if (idxMass500c < 0) idxMass500c = Array.IndexOf(colsUpper, "MASS_500C_CAL");
 
 
             var culture = CultureInfo.InvariantCulture;
+            bool isErositaFormat = idxM500 >= 0 || idxZBest >= 0;
 
             while (!reader.EndOfStream)
             {
@@ -113,6 +186,11 @@ namespace PSZ2Explorer
                 var parts = line.Split(sep);
                 for (int i = 0; i < parts.Length; i++)
                     parts[i] = parts[i].Trim();
+
+                // Salta riga unità o separatore (es. " ;deg;deg;s" o "---;---;..." o |---| pipe table)
+                if (parts.Length > 0 && (parts[0].Contains("deg", StringComparison.OrdinalIgnoreCase) ||
+                        (parts[0].StartsWith("-", StringComparison.Ordinal) && parts[0].Contains("---"))))
+                    continue;
 
                 double? TryParseDouble(int idx)
                 {
@@ -135,15 +213,44 @@ namespace PSZ2Explorer
                     return null;
                 }
 
+                double? redshift = TryParseDouble(idxZ);
+                if (!redshift.HasValue && idxZBest >= 0) redshift = TryParseDouble(idxZBest);
+
+                double? massSz = TryParseDouble(idxMass);
+                if (!massSz.HasValue && idxM500 >= 0)
+                {
+                    var m500 = TryParseDouble(idxM500);
+                    if (m500.HasValue) massSz = m500.Value / 10.0;  // M500 in 10^13 M_sun → 10^14
+                }
+                if (!massSz.HasValue && idxMass500c >= 0)
+                    massSz = TryParseDouble(idxMass500c);  // ACT/HEASARC: mass_500c già in 10^14 M_sun
+
+                double? ra = TryParseDouble(idxRa);
+                if (!ra.HasValue && idxRAJ2000 >= 0) ra = TryParseDouble(idxRAJ2000);
+                if (!ra.HasValue && idxRa >= 0 && idxRa < parts.Length && parts[idxRa].Contains(' '))
+                    ra = ParseSexagesimalRa(parts[idxRa]);
+                if (!ra.HasValue && idxRAJ2000 >= 0 && idxRAJ2000 < parts.Length && parts[idxRAJ2000].Contains(' '))
+                    ra = ParseSexagesimalRa(parts[idxRAJ2000]);
+
+                double? dec = TryParseDouble(idxDec);
+                if (!dec.HasValue && idxDEJ2000 >= 0) dec = TryParseDouble(idxDEJ2000);
+                if (!dec.HasValue && idxDec >= 0 && idxDec < parts.Length && parts[idxDec].Contains(' '))
+                    dec = ParseSexagesimalDec(parts[idxDec]);
+                if (!dec.HasValue && idxDEJ2000 >= 0 && idxDEJ2000 < parts.Length && parts[idxDEJ2000].Contains(' '))
+                    dec = ParseSexagesimalDec(parts[idxDEJ2000]);
+
+                double? snr = TryParseDouble(idxSnr);
+                if (!snr.HasValue && isErositaFormat) snr = 999;  // eROSITA senza SNR: includi in filtri
+
                 var c = new ClusterRecord
                 {
                     Name = idxName >= 0 && idxName < parts.Length ? parts[idxName] : "",
-                    Redshift = TryParseDouble(idxZ),
-                    MassSz = TryParseDouble(idxMass),
-                    Snr = TryParseDouble(idxSnr),
+                    Redshift = redshift,
+                    MassSz = massSz,
+                    Snr = snr,
                     Y5R500 = TryParseDouble(idxY5),
-                    Ra = TryParseDouble(idxRa),
-                    Dec = TryParseDouble(idxDec),
+                    Ra = ra,
+                    Dec = dec,
                     ValidationStatus = TryParseInt(idxVal),
                     CosmologyFlag = TryParseInt(idxCosmo)
                 };
@@ -338,21 +445,79 @@ namespace PSZ2Explorer
 
         private void PlotMassRedshiftScatter()
         {
+            double snrMin = 0;
+            double.TryParse(SnrMinTextBox?.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out snrMin);
+
             var points = _filteredClusters
                 .Where(c => c.Redshift.HasValue && c.MassSz.HasValue &&
                             c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
                 .ToList();
-            if (points.Count == 0)
+
+            // Stesso taglio SNR per overlay (es. ACT): confronto omogeneo
+            var overlayPoints = _overlayClusters
+                .Where(c => c.Snr.HasValue && c.Snr.Value >= snrMin)
+                .Where(c => c.Redshift.HasValue && c.Redshift.Value > 0 && c.MassSz.HasValue &&
+                            c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
+                .ToList();
+
+            // "Confrontabile": limita l'overlay allo stesso range (z, M) del catalogo principale
+            // così i due campioni sono paragonabili nella stessa regione del piano M-z
+            bool comparable = ComparableOverlayCheckBox?.IsChecked == true && points.Count > 0;
+            if (comparable)
+            {
+                double psz2ZMin = points.Min(c => c.Redshift!.Value);
+                double psz2ZMax = points.Max(c => c.Redshift!.Value);
+                double psz2MMin = points.Min(c => c.MassSz!.Value);
+                double psz2MMax = points.Max(c => c.MassSz!.Value);
+                overlayPoints = overlayPoints
+                    .Where(c => c.Redshift!.Value >= psz2ZMin && c.Redshift.Value <= psz2ZMax &&
+                                c.MassSz!.Value >= psz2MMin && c.MassSz.Value <= psz2MMax)
+                    .ToList();
+            }
+
+            if (points.Count == 0 && overlayPoints.Count == 0)
             {
                 PlotView.Model = new PlotModel { Title = "Massa SZ vs redshift" };
                 return;
             }
 
-            double mMin = points.Min(c => c.MassSz!.Value);
-            double mMax = points.Max(c => c.MassSz!.Value);
+            double mMin = double.MaxValue;
+            double mMax = double.MinValue;
+            if (points.Count > 0)
+            {
+                mMin = Math.Min(mMin, points.Min(c => c.MassSz!.Value));
+                mMax = Math.Max(mMax, points.Max(c => c.MassSz!.Value));
+            }
+            if (overlayPoints.Count > 0)
+            {
+                mMin = Math.Min(mMin, overlayPoints.Min(c => c.MassSz!.Value));
+                mMax = Math.Max(mMax, overlayPoints.Max(c => c.MassSz!.Value));
+            }
             if (mMax <= mMin) mMax = mMin + 0.1;
 
-            var model = new PlotModel { Title = "Massa SZ vs redshift" };
+            double zMin = 0;
+            double zMax = 0.5;
+            if (points.Count > 0)
+            {
+                zMin = points.Min(c => c.Redshift!.Value);
+                zMax = points.Max(c => c.Redshift!.Value);
+            }
+            if (overlayPoints.Count > 0)
+            {
+                double ozMin = overlayPoints.Min(c => c.Redshift!.Value);
+                double ozMax = overlayPoints.Max(c => c.Redshift!.Value);
+                zMin = points.Count > 0 ? Math.Min(zMin, ozMin) : ozMin;
+                zMax = points.Count > 0 ? Math.Max(zMax, ozMax) : ozMax;
+            }
+            if (zMax <= zMin) zMax = zMin + 0.1;
+
+            var model = new PlotModel
+            {
+                Title = comparable
+                    ? "Massa SZ vs redshift (stesso range M–z: confrontabile)"
+                    : "Massa SZ vs redshift",
+                IsLegendVisible = false
+            };
 
             model.Axes.Add(new LinearAxis
             {
@@ -363,38 +528,119 @@ namespace PSZ2Explorer
             model.Axes.Add(new LogarithmicAxis
             {
                 Position = AxisPosition.Left,
-                Title = "M_{500}^{SZ} [10^{14} M_\\odot]"
+                Title = "M_{500} [10^{14} M_\\odot]"
             });
 
-            // Colore per massa: da blu (bassa) a rosso (alta) — per didascalia tesi
-            var colorAxis = new OxyPlot.Axes.LinearColorAxis
+            // Nome leggibile per overlay (es. asu.tsv → eROSITA)
+            string overlayTitle = "Secondo catalogo";
+            if (!string.IsNullOrEmpty(_overlayFilePath))
             {
-                Position = AxisPosition.Right,
-                Title = "M_{500}^{SZ} [10^{14} M_\\odot]",
-                Key = "MassColor",
-                Minimum = mMin,
-                Maximum = mMax,
-                LowColor = OxyColors.DarkBlue,
-                HighColor = OxyColors.DarkRed
-            };
-            model.Axes.Add(colorAxis);
-
-            var scatter = new ScatterSeries
-            {
-                MarkerType = MarkerType.Circle,
-                MarkerSize = 3,
-                ColorAxisKey = "MassColor",
-                TrackerFormatString = "Nome: {Tag}\nz = {1:0.000}\nM_500^SZ = {2:0.00} × 10^14 M_⊙"
-            };
-
-            foreach (var c in points)
-            {
-                double z = c.Redshift!.Value;
-                double m = c.MassSz!.Value;
-                scatter.Points.Add(new ScatterPoint(z, m, 3, m) { Tag = c.Name });
+                string fname = System.IO.Path.GetFileNameWithoutExtension(_overlayFilePath);
+                if (fname.Contains("asu", StringComparison.OrdinalIgnoreCase) || fname.Contains("erosita", StringComparison.OrdinalIgnoreCase))
+                    overlayTitle = "eROSITA";
+                else
+                    overlayTitle = fname;
             }
 
-            model.Series.Add(scatter);
+            // Disegno prima overlay, poi PSZ2: così dove si sovrappongono i cerchi PSZ2 restano visibili sopra
+            if (overlayPoints.Count > 0)
+            {
+                var scatterOverlay = new ScatterSeries
+                {
+                    Title = overlayTitle,
+                    MarkerType = MarkerType.Triangle,
+                    MarkerSize = 5,
+                    MarkerFill = OxyColors.DarkOrange,
+                    MarkerStroke = OxyColors.White,
+                    MarkerStrokeThickness = 0.8,
+                    TrackerFormatString = "{0}\nNome: {Tag}\nz = {2:0.000}\nM_500 = {4:0.00} × 10^14 M_⊙"
+                };
+                foreach (var c in overlayPoints)
+                {
+                    double z = c.Redshift!.Value;
+                    double m = c.MassSz!.Value;
+                    scatterOverlay.Points.Add(new ScatterPoint(z, m) { Tag = c.Name });
+                }
+                model.Series.Add(scatterOverlay);
+            }
+
+            if (points.Count > 0)
+            {
+                var scatterPsz2 = new ScatterSeries
+                {
+                    Title = "PSZ2",
+                    MarkerType = MarkerType.Circle,
+                    MarkerSize = 5,
+                    MarkerFill = OxyColors.DarkBlue,
+                    MarkerStroke = OxyColors.White,
+                    MarkerStrokeThickness = 0.8,
+                    TrackerFormatString = "{0}\nNome: {Tag}\nz = {2:0.000}\nM_500 = {4:0.00} × 10^14 M_⊙"
+                };
+                foreach (var c in points)
+                {
+                    double z = c.Redshift!.Value;
+                    double m = c.MassSz!.Value;
+                    scatterPsz2.Points.Add(new ScatterPoint(z, m) { Tag = c.Name });
+                }
+                model.Series.Add(scatterPsz2);
+            }
+
+            // Legenda dentro il grafico: testo colorato come il catalogo (PSZ2 = blu, overlay = arancione)
+            double zLeg = zMin + (zMax - zMin) * 0.72;
+            double logMmin = Math.Log10(mMin);
+            double logMmax = Math.Log10(mMax);
+            double mLeg1 = Math.Pow(10, logMmin + (logMmax - logMmin) * 0.88);
+            double mLeg2 = Math.Pow(10, logMmin + (logMmax - logMmin) * 0.78);
+
+            if (points.Count > 0)
+            {
+                model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
+                {
+                    Text = "● PSZ2",
+                    TextPosition = new DataPoint(zLeg, mLeg1),
+                    TextColor = OxyColors.DarkBlue,
+                    FontSize = 12,
+                    FontWeight = 600,
+                    TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
+                    TextVerticalAlignment = OxyPlot.VerticalAlignment.Middle
+                });
+            }
+            if (overlayPoints.Count > 0)
+            {
+                model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
+                {
+                    Text = "▲ " + overlayTitle,
+                    TextPosition = new DataPoint(zLeg, mLeg2),
+                    TextColor = OxyColors.DarkOrange,
+                    FontSize = 12,
+                    FontWeight = 600,
+                    TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
+                    TextVerticalAlignment = OxyPlot.VerticalAlignment.Middle
+                });
+            }
+
+            // In modalità confrontabile: annotazione con conteggi e range per citazione in tesi
+            if (comparable && (points.Count > 0 || overlayPoints.Count > 0))
+            {
+                double psz2ZMin = points.Count > 0 ? points.Min(c => c.Redshift!.Value) : 0;
+                double psz2ZMax = points.Count > 0 ? points.Max(c => c.Redshift!.Value) : 0;
+                double psz2MMin = points.Count > 0 ? points.Min(c => c.MassSz!.Value) : 0;
+                double psz2MMax = points.Count > 0 ? points.Max(c => c.MassSz!.Value) : 0;
+                string rangeText = string.Format(CultureInfo.InvariantCulture,
+                    "N_PSZ2 = {0},  N_{1} = {2}   |   z in [{3:F2}, {4:F2}],  M500 in [{5:F2}, {6:F2}] x10^14 Msun",
+                    points.Count, overlayTitle, overlayPoints.Count, psz2ZMin, psz2ZMax, psz2MMin, psz2MMax);
+                double mLeg0 = Math.Pow(10, logMmin + (logMmax - logMmin) * 0.02);
+                model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
+                {
+                    Text = rangeText,
+                    TextPosition = new DataPoint(zMin + (zMax - zMin) * 0.02, mLeg0),
+                    TextColor = OxyColors.DarkGray,
+                    FontSize = 9,
+                    TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
+                    TextVerticalAlignment = OxyPlot.VerticalAlignment.Top
+                });
+            }
+
             PlotView.Model = model;
         }
 
@@ -842,6 +1088,11 @@ namespace PSZ2Explorer
         {
             if (_allClusters.Count > 0)
                 ApplyFiltersAndUpdatePlot();
+        }
+
+        private void ComparableOverlayCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            UpdatePlot();
         }
 
 
