@@ -8,6 +8,24 @@ Applicazione desktop **WPF** (.NET 8) per esplorare cataloghi di ammassi di gala
 
 ---
 
+## Anteprima
+
+Grafico **Massa SZ vs redshift**: scatter in scala logaritmica sulla massa; i punti sono colorati in base a M₅₀₀^SZ (barra colori a destra). Permette il confronto tra PSZ2 e overlay (ACT, eROSITA).
+
+![Massa SZ vs redshift](docs/massa-vs-redshift.png)
+
+*Massa SZ vs redshift — asse z (redshift), asse y M₅₀₀ [10¹⁴ M☉]; colore per massa.*
+
+---
+
+**Distribuzione delle masse SZ (log₁₀)**: istogramma della distribuzione di log₁₀(M_SZ) nel campione filtrato; barre con gradiente di colore (blu → viola → rosso) in base al valore di massa.
+
+![Distribuzione masse SZ log10](docs/distribuzione-masse-sz-log10.png)
+
+*Distribuzione delle masse SZ in scala log₁₀ — picco tipico intorno a log₁₀(M) ≈ 0,7–0,8.*
+
+---
+
 ## Requisiti
 
 - **Windows** (WPF)
@@ -64,6 +82,9 @@ Oppure apri `PSZ2Explorer.sln` in Visual Studio e avvia il progetto **PSZ2Explor
 ```
 PSZ2Explorer/
 ├── README.md
+├── docs/
+│   ├── massa-vs-redshift.png
+│   └── distribuzione-masse-sz-log10.png
 ├── PSZ2Explorer.sln
 └── PSZ2Explorer/
     └── PSZ2Explorer/
