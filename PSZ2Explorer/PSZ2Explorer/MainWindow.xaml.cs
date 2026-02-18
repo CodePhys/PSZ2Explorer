@@ -187,20 +187,58 @@ namespace PSZ2Explorer
             if (header == null)
                 return list;
 
-            // Separatore: | (HEASARC pipe table), ; o ,
+            // Rimuovi BOM UTF-8 se presente (altrimenti la prima colonna non fa match)
+            if (header.Length > 0 && header[0] == '\uFEFF')
+                header = header.Substring(1);
+
+            // Catalogo PSZ2 ESA usa PUNTO E VIRGOLA (;) come separatore di colonne. Con la virgola i numeri (es. 0,00548159) si spezzano e i dati sono errati.
+            bool looksLikePsz2 = header.IndexOf("y5r500", StringComparison.OrdinalIgnoreCase) >= 0
+                || header.IndexOf("mass_sz", StringComparison.OrdinalIgnoreCase) >= 0
+                || header.IndexOf("source_number", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (looksLikePsz2 && !header.Contains(";"))
+            {
+                MessageBox.Show(
+                    "Questo file sembra il catalogo PSZ2 ma non usa il punto e virgola (;) come separatore di colonne.\n\n" +
+                    "Per un caricamento corretto:\n" +
+                    "• Usare il file Catalogo.csv dalla cartella Data del progetto (con ; come separatore),\n" +
+                    "• Non riaprire e salvare il file da Excel come \"CSV (virgola)\", altrimenti i dati vengono interpretati male.",
+                    "File non adatto",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return list;
+            }
+
+            // Separatore: | (HEASARC), ; (PSZ2/ESA), altrimenti ,
             char sep = header.Contains("|") ? '|' : (header.Contains(";") ? ';' : ',');
             var columns = header.Split(sep);
             for (int i = 0; i < columns.Length; i++)
                 columns[i] = columns[i].Trim();
 
-            // Nomi colonne in maiuscolo: CSV ESA usa "y5r500" (minuscolo), separatore ;, decimali con virgola
-            string[] colsUpper = columns.Select(c => c.ToUpperInvariant().Trim()).ToArray();
+            // Nomi colonne in maiuscolo; rimuovi \r (fine riga Windows) per match affidabile
+            string[] colsUpper = columns.Select(c => c.Trim().Replace("\r", "").Replace("\n", "").ToUpperInvariant()).ToArray();
 
             int idxName = Array.IndexOf(colsUpper, "NAME");
             int idxZ = Array.IndexOf(colsUpper, "REDSHIFT");
             int idxMass = Array.IndexOf(colsUpper, "MASS_SZ");
             int idxSnr = Array.IndexOf(colsUpper, "SNR");
-            int idxY5 = Array.IndexOf(colsUpper, "Y5R500");  // colonna y5r500 (valori tipici ~0.001–0.05)
+            // y5r500: nel PSZ2 ESA è SEMPRE la colonna subito prima di "y5r500_error" — così si evita di leggere nn_quality_flag (0,9) per sbaglio
+            int idxY5Err = -1;
+            for (int i = 0; i < columns.Length; i++)
+            {
+                string col = columns[i].Trim().Replace("\r", "").Replace("\n", "").ToUpperInvariant();
+                if (col == "Y5R500_ERROR" || (col.Contains("Y5R500") && col.Contains("ERROR")))
+                { idxY5Err = i; break; }
+            }
+            int idxY5 = (idxY5Err > 0) ? idxY5Err - 1 : -1;
+            if (idxY5 < 0)
+            {
+                for (int i = 0; i < columns.Length; i++)
+                {
+                    string col = columns[i].Trim().Replace("\r", "").Replace("\n", "");
+                    if (col.Equals("y5r500", StringComparison.OrdinalIgnoreCase) && !col.Contains("error"))
+                    { idxY5 = i; break; }
+                }
+            }
             int idxRa = Array.IndexOf(colsUpper, "RA");
             int idxDec = Array.IndexOf(colsUpper, "DEC");
             int idxVal = Array.IndexOf(colsUpper, "VALIDATION_STATUS");
@@ -239,8 +277,10 @@ namespace PSZ2Explorer
                     var s = parts[idx];
                     if (double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v))
                         return v;
-                    // Catalogo ESA: alcuni numeri usano virgola decimale (es. 10,356931)
+                    // Catalogo ESA: virgola decimale (es. 0,00548159)
                     if (double.TryParse(s.Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out v))
+                        return v;
+                    if (double.TryParse(s, NumberStyles.Any, CultureInfo.GetCultureInfo("it-IT"), out v))
                         return v;
                     return null;
                 }
@@ -283,13 +323,16 @@ namespace PSZ2Explorer
                 double? snr = TryParseDouble(idxSnr);
                 if (!snr.HasValue && isErositaFormat) snr = 999;  // eROSITA senza SNR: includi in filtri
 
+                // y5r500: leggi dalla colonna "y5r500" (virgola o punto decimale); il grafico Y–M filtra per range 10⁻⁶–0,2
+                double? y5 = idxY5 >= 0 ? TryParseDouble(idxY5) : null;
+
                 var c = new ClusterRecord
                 {
                     Name = idxName >= 0 && idxName < parts.Length ? parts[idxName] : "",
                     Redshift = redshift,
                     MassSz = massSz,
                     Snr = snr,
-                    Y5R500 = TryParseDouble(idxY5),
+                    Y5R500 = y5,
                     Ra = ra,
                     Dec = dec,
                     ValidationStatus = TryParseInt(idxVal),
@@ -834,9 +877,16 @@ namespace PSZ2Explorer
                 .ToList();
             if (points.Count == 0)
             {
+                int conY5 = _filteredClusters.Count(c => c.Y5R500.HasValue);
+                int conY5InRange = _filteredClusters.Count(c => c.Y5R500.HasValue && c.Y5R500.Value >= Y5R500PhysMin && c.Y5R500.Value <= Y5R500PhysMax);
+                string hint = conY5 == 0
+                    ? "Il CSV deve contenere la colonna 'y5r500' (parametro Compton entro 5 R₅₀₀). Verificare nome colonna e separatore decimale (virgola/punto)."
+                    : conY5InRange == 0
+                        ? "Nessun punto con y5r500 nel range 10⁻⁶–0,2. Verificare che si usi la colonna y5r500 (non y5r500_error) e che i decimali usino la virgola."
+                        : "Nessun punto con sia y5r500 che massa nel range. Verificare filtri (SNR, campione cosmologico) e range massa 0,1–50.";
                 PlotView.Model = new PlotModel
                 {
-                    Title = "y_{5R500} vs Massa SZ — Nessun dato nel range fisico (y5r500 0,001–0,05). Verificare il CSV caricato."
+                    Title = "y_{5R500} vs Massa SZ — Nessun dato. " + hint
                 };
                 return;
             }
