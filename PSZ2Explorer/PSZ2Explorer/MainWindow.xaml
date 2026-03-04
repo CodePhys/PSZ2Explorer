@@ -59,6 +59,7 @@
                             <ComboBoxItem Content="Heatmap massa–redshift" Tag="HeatMapMZ"/>
                             <ComboBoxItem Content="Mappa celeste (Aitoff)" Tag="SkyMap"/>
                             <ComboBoxItem Content="Mappa RA–Dec–z (colore = z)" Tag="SkyMapZ"/>
+                            <ComboBoxItem Content="Y (PSZ2) vs M (eROSITA) cross-match" Tag="ScatterYvsM_Erosita"/>
                         </ComboBox>
                     </StackPanel>
                 </StackPanel>
@@ -102,6 +103,53 @@
 
                     <TextBlock x:Name="SampleInfoTextBlock" Margin="24 0 0 0" VerticalAlignment="Center"
                                Foreground="#455A64" FontWeight="SemiBold"/>
+                </StackPanel>
+                <!-- Riga 3: Tabella dipendenza da taglio SNR (SNR≥6, SNR≥8) -->
+                <StackPanel Margin="0 6 0 0">
+                    <TextBlock Text="Dipendenza da taglio SNR (campione PSZ2)" FontWeight="SemiBold" Foreground="#37474F" Margin="0 0 0 4"/>
+                    <Border BorderBrush="#B0BEC5" BorderThickness="1" CornerRadius="2" Padding="0" Margin="0 0 0 2">
+                        <Grid x:Name="SnrComparisonTable" HorizontalAlignment="Left">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <!-- Intestazioni -->
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="SNR≥" Margin="4 2" FontWeight="SemiBold" Foreground="#37474F"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="N" Margin="4 2" FontWeight="SemiBold" Foreground="#37474F"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="z_med (16–84%)" Margin="4 2" FontWeight="SemiBold" Foreground="#37474F"/>
+                        <TextBlock Grid.Row="0" Grid.Column="3" Text="M_500,med^SZ (16–84%)" Margin="4 2" FontWeight="SemiBold" Foreground="#37474F"/>
+                        <TextBlock Grid.Row="0" Grid.Column="4" Text="frac(z&gt;0.5)" Margin="4 2" FontWeight="SemiBold" Foreground="#37474F"/>
+                        <TextBlock Grid.Row="0" Grid.Column="5" Text="frac(z&gt;0.7)" Margin="4 2" FontWeight="SemiBold" Foreground="#37474F"/>
+                        <TextBlock Grid.Row="0" Grid.Column="6" Text="frac(M&gt;10¹⁵ M☉)" Margin="4 2" FontWeight="SemiBold" Foreground="#37474F"/>
+                        <!-- Riga SNR≥6 -->
+                        <TextBlock x:Name="SnrT_R1_C0" Grid.Row="1" Grid.Column="0" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R1_C1" Grid.Row="1" Grid.Column="1" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R1_C2" Grid.Row="1" Grid.Column="2" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R1_C3" Grid.Row="1" Grid.Column="3" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R1_C4" Grid.Row="1" Grid.Column="4" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R1_C5" Grid.Row="1" Grid.Column="5" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R1_C6" Grid.Row="1" Grid.Column="6" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <!-- Riga SNR≥8 -->
+                        <TextBlock x:Name="SnrT_R2_C0" Grid.Row="2" Grid.Column="0" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R2_C1" Grid.Row="2" Grid.Column="1" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R2_C2" Grid.Row="2" Grid.Column="2" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R2_C3" Grid.Row="2" Grid.Column="3" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R2_C4" Grid.Row="2" Grid.Column="4" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R2_C5" Grid.Row="2" Grid.Column="5" Text="" Margin="4 2" Foreground="#37474F"/>
+                        <TextBlock x:Name="SnrT_R2_C6" Grid.Row="2" Grid.Column="6" Text="" Margin="4 2" Foreground="#37474F"/>
+                    </Grid>
+                    </Border>
+                    <TextBlock x:Name="SnrTableMessage" Text="" Margin="0 4 0 0" Foreground="#546E7A" FontSize="11" FontStyle="Italic" TextWrapping="Wrap" MaxWidth="900"/>
                 </StackPanel>
             </StackPanel>
         </Border>

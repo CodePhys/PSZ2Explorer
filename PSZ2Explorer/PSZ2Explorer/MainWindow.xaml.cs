@@ -49,9 +49,16 @@ namespace PSZ2Explorer
         /// <summary>Numero massimo di punti overlay 2 (es. eROSITA) nel grafico M–z per mantenere leggibilità.</summary>
         private const int MaxOverlay2DisplayPoints = 600;
 
-        // y5r500: range fisico tipico (PSZ2) ~0.001–0.05. Valori >0.2 o <1e-6 indicano colonna/CSV errati.
+        // y5r500: range fisico tipico (PSZ2) ~0.001–0.05. Valori >0.05 sono incompatibili (es. nn_quality_flag) e vanno esclusi.
         private const double Y5R500PhysMin = 1e-6;
-        private const double Y5R500PhysMax = 0.2;
+        private const double Y5R500PhysMax = 0.05;
+        // Grafico e fit solo su punti nel range fisico (escludiamo valori > 0.05)
+        private const double Y5R500PlotMin = 1e-6;
+        private const double Y5R500PlotMax = 0.05;
+        /// <summary>Soglia cross-match PSZ2–eROSITA: distanza angolare massima (gradi). 3 arcmin = 0,05°.</summary>
+        private const double CrossMatchRadiusDeg = 3.0 / 60.0;
+        /// <summary>Massima differenza di redshift per considerare la stessa sorgente. Richiesto z su entrambi.</summary>
+        private const double CrossMatchMaxDz = 0.02;
 
         public MainWindow()
         {
@@ -95,7 +102,9 @@ namespace PSZ2Explorer
                 _overlayClusters = LoadClustersFromCsv(dlg.FileName);
                 _overlayFilePath = dlg.FileName;
                 if (FindName("OverlayLabel") is System.Windows.Controls.TextBlock overlayTb)
-                    overlayTb.Text = System.IO.Path.GetFileName(_overlayFilePath);
+                    overlayTb.Text = _overlayClusters.Count > 0
+                        ? $"{System.IO.Path.GetFileName(_overlayFilePath)} ({_overlayClusters.Count})"
+                        : "";
                 ApplyFiltersAndUpdatePlot();
             }
             catch (Exception ex)
@@ -120,7 +129,9 @@ namespace PSZ2Explorer
                 _overlayClusters2 = LoadClustersFromCsv(dlg.FileName);
                 _overlayFilePath2 = dlg.FileName;
                 if (FindName("Overlay2Label") is System.Windows.Controls.TextBlock tb)
-                    tb.Text = System.IO.Path.GetFileName(_overlayFilePath2);
+                    tb.Text = _overlayClusters2.Count > 0
+                        ? $"{System.IO.Path.GetFileName(_overlayFilePath2)} ({_overlayClusters2.Count})"
+                        : "";
                 ApplyFiltersAndUpdatePlot();
             }
             catch (Exception ex)
@@ -163,6 +174,18 @@ namespace PSZ2Explorer
             if (!double.TryParse(tokens[2], NumberStyles.Any, CultureInfo.InvariantCulture, out var sec)) return null;
             int sign = d >= 0 ? 1 : -1;
             return sign * (Math.Abs(d) + m / 60.0 + sec / 3600.0);
+        }
+
+        /// <summary>Distanza angolare tra due punti (RA, Dec in gradi). Ritorna la distanza in gradi.</summary>
+        private static double AngularSeparationDeg(double ra1Deg, double dec1Deg, double ra2Deg, double dec2Deg)
+        {
+            const double deg2rad = Math.PI / 180.0;
+            double ra1 = ra1Deg * deg2rad, dec1 = dec1Deg * deg2rad;
+            double ra2 = ra2Deg * deg2rad, dec2 = dec2Deg * deg2rad;
+            double d = 2.0 * Math.Asin(Math.Sqrt(
+                Math.Sin((dec1 - dec2) / 2) * Math.Sin((dec1 - dec2) / 2) +
+                Math.Cos(dec1) * Math.Cos(dec2) * Math.Sin((ra1 - ra2) / 2) * Math.Sin((ra1 - ra2) / 2)));
+            return d / deg2rad;
         }
 
         private List<ClusterRecord> LoadClustersFromCsv(string path)
@@ -221,7 +244,7 @@ namespace PSZ2Explorer
             int idxZ = Array.IndexOf(colsUpper, "REDSHIFT");
             int idxMass = Array.IndexOf(colsUpper, "MASS_SZ");
             int idxSnr = Array.IndexOf(colsUpper, "SNR");
-            // y5r500: nel PSZ2 ESA è SEMPRE la colonna subito prima di "y5r500_error" — così si evita di leggere nn_quality_flag (0,9) per sbaglio
+            // y5r500: preferire colonna con nome esatto "y5r500"; altrimenti colonna prima di "y5r500_error"; infine indice fisso per layout PSZ2 ESA
             int idxY5Err = -1;
             for (int i = 0; i < columns.Length; i++)
             {
@@ -229,16 +252,36 @@ namespace PSZ2Explorer
                 if (col == "Y5R500_ERROR" || (col.Contains("Y5R500") && col.Contains("ERROR")))
                 { idxY5Err = i; break; }
             }
-            int idxY5 = (idxY5Err > 0) ? idxY5Err - 1 : -1;
+            int idxY5 = -1;
+            for (int i = 0; i < columns.Length; i++)
+            {
+                string col = columns[i].Trim().Replace("\r", "").Replace("\n", "");
+                if (col.Equals("y5r500", StringComparison.OrdinalIgnoreCase) && col.IndexOf("error", StringComparison.OrdinalIgnoreCase) < 0)
+                { idxY5 = i; break; }
+            }
             if (idxY5 < 0)
             {
                 for (int i = 0; i < columns.Length; i++)
                 {
-                    string col = columns[i].Trim().Replace("\r", "").Replace("\n", "");
-                    if (col.Equals("y5r500", StringComparison.OrdinalIgnoreCase) && !col.Contains("error"))
+                    string col = columns[i].Trim().Replace("\r", "").Replace("\n", "").ToUpperInvariant();
+                    if (col.Contains("Y5") && col.Contains("R500") && !col.Contains("ERROR"))
                     { idxY5 = i; break; }
                 }
             }
+            if (idxY5 < 0 && idxY5Err > 0)
+            {
+                string prevCol = columns[idxY5Err - 1].Trim().Replace("\r", "").Replace("\n", "");
+                if (prevCol.IndexOf("y5r500", StringComparison.OrdinalIgnoreCase) >= 0 && prevCol.IndexOf("error", StringComparison.OrdinalIgnoreCase) < 0)
+                    idxY5 = idxY5Err - 1;
+            }
+            // Layout PSZ2 ESA standard: y5r500 è colonna 8 (indice 7), y5r500_error è colonna 9 (indice 8)
+            if (idxY5 < 0 && columns.Length > 8 && (colsUpper[0] == "SOURCE_NUMBER" || colsUpper[1] == "NAME") && idxY5Err == 8)
+                idxY5 = 7;
+            // Se il file ha separatore ; e almeno 9 colonne (formato PSZ2), usa indice 7 per y5r500
+            if (idxY5 < 0 && sep == ';' && columns.Length >= 9)
+                idxY5 = 7;
+            // Per formato PSZ2: scegliere la colonna il cui valore è nel range fisico y5r500 (0,001–0,05), non nn_quality_flag (0,4–0,99)
+            bool y5ColumnChosen = false;
             int idxRa = Array.IndexOf(colsUpper, "RA");
             int idxDec = Array.IndexOf(colsUpper, "DEC");
             int idxVal = Array.IndexOf(colsUpper, "VALIDATION_STATUS");
@@ -274,10 +317,13 @@ namespace PSZ2Explorer
                 double? TryParseDouble(int idx)
                 {
                     if (idx < 0 || idx >= parts.Length) return null;
-                    var s = parts[idx];
-                    if (double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v))
+                    var s = parts[idx].Trim().Replace('\u00A0', ' ');
+                    if (string.IsNullOrWhiteSpace(s)) return null;
+                    // Prima prova con virgola → punto (formato ESA/italiano) così i valori tipo 0,00548159 vengono sempre letti
+                    if (s.Contains(',') && double.TryParse(s.Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out var v))
                         return v;
-                    // Catalogo ESA: virgola decimale (es. 0,00548159)
+                    if (double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out v))
+                        return v;
                     if (double.TryParse(s.Replace(',', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out v))
                         return v;
                     if (double.TryParse(s, NumberStyles.Any, CultureInfo.GetCultureInfo("it-IT"), out v))
@@ -301,7 +347,8 @@ namespace PSZ2Explorer
                 if (!massSz.HasValue && idxM500 >= 0)
                 {
                     var m500 = TryParseDouble(idxM500);
-                    if (m500.HasValue) massSz = m500.Value / 10.0;  // M500 in 10^13 M_sun → 10^14
+                    // Catalogo eROSITA ASU (J/A+A/685/A106): M500 in 10^13 M_sun (riga unità); /10 → 10^14. Se file con unità diverse, verificare.
+                    if (m500.HasValue) massSz = m500.Value / 10.0;
                 }
                 if (!massSz.HasValue && idxMass500c >= 0)
                     massSz = TryParseDouble(idxMass500c);  // ACT/HEASARC: mass_500c già in 10^14 M_sun
@@ -323,8 +370,24 @@ namespace PSZ2Explorer
                 double? snr = TryParseDouble(idxSnr);
                 if (!snr.HasValue && isErositaFormat) snr = 999;  // eROSITA senza SNR: includi in filtri
 
-                // y5r500: leggi dalla colonna "y5r500" (virgola o punto decimale); il grafico Y–M filtra per range 10⁻⁶–0,2
-                double? y5 = idxY5 >= 0 ? TryParseDouble(idxY5) : null;
+                // y5r500: leggi dalla colonna "y5r500"; se formato PSZ2, scegli la colonna con valori nel range fisico (0,001–0,05), non nn_quality_flag (0,4–0,99)
+                double? y5 = null;
+                if (idxY5 >= 0)
+                {
+                    if (!y5ColumnChosen && sep == ';' && parts.Length > 8 && (idxY5 == 6 || idxY5 == 7))
+                    {
+                        double? v6 = TryParseDouble(6);
+                        double? v7 = TryParseDouble(7);
+                        bool inRangeY5(double? v) => v.HasValue && v.Value >= 0.001 && v.Value <= 0.05;
+                        bool likeNnQuality(double? v) => v.HasValue && v.Value > 0.2;
+                        if (inRangeY5(v6) && likeNnQuality(v7))
+                            idxY5 = 6;
+                        else if (inRangeY5(v7) && likeNnQuality(v6))
+                            idxY5 = 7;
+                        y5ColumnChosen = true; // usa sempre la colonna decisa dalla prima riga
+                    }
+                    y5 = TryParseDouble(idxY5);
+                }
 
                 var c = new ClusterRecord
                 {
@@ -434,11 +497,168 @@ namespace PSZ2Explorer
         private void ApplyFiltersAndUpdatePlot()
         {
             if (_allClusters.Count == 0)
+            {
+                _filteredClusters = new List<ClusterRecord>();
+                UpdateSampleInfoText();
                 return;
-
+            }
             _filteredClusters = GetFilteredSample().ToList();
-            SampleInfoTextBlock.Text = $"Cluster selezionati: {_filteredClusters.Count}";
+            UpdateSampleInfoText();
             UpdatePlot();
+        }
+
+        private void UpdateSampleInfoText()
+        {
+            if (SampleInfoTextBlock == null)
+                return;
+            GetPlottedCountsForScatterMZ(out int nPsz2, out int nOverlay1, out int nOverlay2);
+            var parts = new List<string> { $"PSZ2: {nPsz2}" };
+            if (_overlayClusters.Count > 0)
+                parts.Add($"Overlay 1: {nOverlay1}");
+            if (_overlayClusters2.Count > 0)
+                parts.Add($"Overlay 2: {nOverlay2}");
+            SampleInfoTextBlock.Text = string.Join("   |   ", parts);
+
+            // Tabella dipendenza da taglio SNR (SNR≥6, SNR≥8)
+            const double snrLow = 6.0;
+            const double snrHigh = 8.0;
+            var sampleLow = _allClusters.Count > 0 ? GetFilteredSampleForSnr(snrLow) : new List<ClusterRecord>();
+            var sampleHigh = _allClusters.Count > 0 ? GetFilteredSampleForSnr(snrHigh) : new List<ClusterRecord>();
+
+            if (SnrComparisonTable != null)
+            {
+                bool hasData = sampleLow.Count > 0 || sampleHigh.Count > 0;
+                if (!hasData)
+                {
+                    SnrT_R1_C0.Text = SnrT_R1_C1.Text = SnrT_R1_C2.Text = SnrT_R1_C3.Text = SnrT_R1_C4.Text = SnrT_R1_C5.Text = SnrT_R1_C6.Text = "—";
+                    SnrT_R2_C0.Text = SnrT_R2_C1.Text = SnrT_R2_C2.Text = SnrT_R2_C3.Text = SnrT_R2_C4.Text = SnrT_R2_C5.Text = SnrT_R2_C6.Text = "—";
+                    if (SnrTableMessage != null) SnrTableMessage.Text = "Caricare il catalogo PSZ2 per vedere il confronto.";
+                }
+                else
+                {
+                    var zLow = sampleLow.Where(c => c.Redshift.HasValue).Select(c => c.Redshift!.Value).OrderBy(z => z).ToList();
+                    var mLow = sampleLow.Where(c => c.MassSz.HasValue).Select(c => c.MassSz!.Value).OrderBy(m => m).ToList();
+                    var zHigh = sampleHigh.Where(c => c.Redshift.HasValue).Select(c => c.Redshift!.Value).OrderBy(z => z).ToList();
+                    var mHigh = sampleHigh.Where(c => c.MassSz.HasValue).Select(c => c.MassSz!.Value).OrderBy(m => m).ToList();
+                    double zMedL = zLow.Count > 0 ? Median(zLow) : 0, zP16L = zLow.Count > 0 ? Percentile(zLow, 0.16) : 0, zP84L = zLow.Count > 0 ? Percentile(zLow, 0.84) : 0;
+                    double mMedL = mLow.Count > 0 ? Median(mLow) : 0, mP16L = mLow.Count > 0 ? Percentile(mLow, 0.16) : 0, mP84L = mLow.Count > 0 ? Percentile(mLow, 0.84) : 0;
+                    double zMedH = zHigh.Count > 0 ? Median(zHigh) : 0, zP16H = zHigh.Count > 0 ? Percentile(zHigh, 0.16) : 0, zP84H = zHigh.Count > 0 ? Percentile(zHigh, 0.84) : 0;
+                    double mMedH = mHigh.Count > 0 ? Median(mHigh) : 0, mP16H = mHigh.Count > 0 ? Percentile(mHigh, 0.16) : 0, mP84H = mHigh.Count > 0 ? Percentile(mHigh, 0.84) : 0;
+                    double fracZ05L = sampleLow.Count > 0 ? (double)sampleLow.Count(c => c.Redshift.HasValue && c.Redshift.Value > 0.5) / sampleLow.Count : 0;
+                    double fracZ07L = sampleLow.Count > 0 ? (double)sampleLow.Count(c => c.Redshift.HasValue && c.Redshift.Value > 0.7) / sampleLow.Count : 0;
+                    double fracM10L = sampleLow.Count > 0 ? (double)sampleLow.Count(c => c.MassSz.HasValue && c.MassSz.Value > 10) / sampleLow.Count : 0;
+                    double fracZ05H = sampleHigh.Count > 0 ? (double)sampleHigh.Count(c => c.Redshift.HasValue && c.Redshift.Value > 0.5) / sampleHigh.Count : 0;
+                    double fracZ07H = sampleHigh.Count > 0 ? (double)sampleHigh.Count(c => c.Redshift.HasValue && c.Redshift.Value > 0.7) / sampleHigh.Count : 0;
+                    double fracM10H = sampleHigh.Count > 0 ? (double)sampleHigh.Count(c => c.MassSz.HasValue && c.MassSz.Value > 10) / sampleHigh.Count : 0;
+
+                    SnrT_R1_C0.Text = snrLow.ToString(CultureInfo.InvariantCulture);
+                    SnrT_R1_C1.Text = sampleLow.Count.ToString(CultureInfo.InvariantCulture);
+                    SnrT_R1_C2.Text = zLow.Count > 0 ? string.Format(CultureInfo.InvariantCulture, "{0:F3} ({1:F3}–{2:F3})", zMedL, zP16L, zP84L) : "—";
+                    SnrT_R1_C3.Text = mLow.Count > 0 ? string.Format(CultureInfo.InvariantCulture, "{0:F2} ({1:F2}–{2:F2}) ×10¹⁴ M☉", mMedL, mP16L, mP84L) : "—";
+                    SnrT_R1_C4.Text = string.Format(CultureInfo.InvariantCulture, "{0:P1}", fracZ05L);
+                    SnrT_R1_C5.Text = string.Format(CultureInfo.InvariantCulture, "{0:P1}", fracZ07L);
+                    SnrT_R1_C6.Text = string.Format(CultureInfo.InvariantCulture, "{0:P1}", fracM10L);
+
+                    SnrT_R2_C0.Text = snrHigh.ToString(CultureInfo.InvariantCulture);
+                    SnrT_R2_C1.Text = sampleHigh.Count.ToString(CultureInfo.InvariantCulture);
+                    SnrT_R2_C2.Text = zHigh.Count > 0 ? string.Format(CultureInfo.InvariantCulture, "{0:F3} ({1:F3}–{2:F3})", zMedH, zP16H, zP84H) : "—";
+                    SnrT_R2_C3.Text = mHigh.Count > 0 ? string.Format(CultureInfo.InvariantCulture, "{0:F2} ({1:F2}–{2:F2}) ×10¹⁴ M☉", mMedH, mP16H, mP84H) : "—";
+                    SnrT_R2_C4.Text = string.Format(CultureInfo.InvariantCulture, "{0:P1}", fracZ05H);
+                    SnrT_R2_C5.Text = string.Format(CultureInfo.InvariantCulture, "{0:P1}", fracZ07H);
+                    SnrT_R2_C6.Text = string.Format(CultureInfo.InvariantCulture, "{0:P1}", fracM10H);
+
+                    if (SnrTableMessage != null)
+                        SnrTableMessage.Text = "→ Alzando la soglia SNR si selezionano sistemi mediamente più massicci e si “sposta” la popolazione (effetto selezione).";
+                }
+            }
+        }
+
+        private static double Median(List<double> sortedValues)
+        {
+            if (sortedValues == null || sortedValues.Count == 0) return 0;
+            int n = sortedValues.Count;
+            if (n % 2 == 1) return sortedValues[n / 2];
+            return (sortedValues[n / 2 - 1] + sortedValues[n / 2]) / 2.0;
+        }
+
+        /// <summary>Percentile da lista ordinata (q in [0,1]; interpolazione lineare).</summary>
+        private static double Percentile(List<double> sortedValues, double q)
+        {
+            if (sortedValues == null || sortedValues.Count == 0) return 0;
+            if (q <= 0) return sortedValues[0];
+            if (q >= 1) return sortedValues[sortedValues.Count - 1];
+            double idx = (sortedValues.Count - 1) * q;
+            int i = (int)Math.Floor(idx);
+            if (i >= sortedValues.Count - 1) return sortedValues[sortedValues.Count - 1];
+            double t = idx - i;
+            return sortedValues[i] * (1 - t) + sortedValues[i + 1] * t;
+        }
+
+        /// <summary>Campione filtrato con una soglia SNR fissa (stessi altri filtri: z, M, validation, cosmology).</summary>
+        private List<ClusterRecord> GetFilteredSampleForSnr(double snrMin)
+        {
+            var sample = _allClusters
+                .Where(c => c.Snr.HasValue && c.Snr.Value >= snrMin)
+                .Where(c => c.Redshift.HasValue && c.Redshift.Value > 0)
+                .Where(c => c.MassSz.HasValue && c.MassSz.Value > 0)
+                .Where(c => !c.ValidationStatus.HasValue || c.ValidationStatus.Value > 0);
+            if (CosmologyOnlyCheckBox?.IsChecked == true)
+                sample = sample.Where(c => c.CosmologyFlag.HasValue && c.CosmologyFlag.Value == 1);
+            return sample
+                .Where(c => c.MassSz!.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
+                .ToList();
+        }
+
+        /// <summary>Punti PSZ2 usati nel grafico Massa vs redshift (stessi filtri: SNR, range M).</summary>
+        private List<ClusterRecord> GetPsz2PointsForScatterMZ()
+        {
+            return _filteredClusters
+                .Where(c => c.Redshift.HasValue && c.MassSz.HasValue &&
+                            c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
+                .ToList();
+        }
+
+        /// <summary>Conteggi effettivamente plottati nel grafico Massa vs redshift (stesso SNR min, range M–z, eventuale confrontabile).</summary>
+        private void GetPlottedCountsForScatterMZ(out int nPsz2, out int nOverlay1, out int nOverlay2)
+        {
+            double snrMin = 0;
+            double.TryParse(SnrMinTextBox?.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out snrMin);
+
+            var points = _filteredClusters
+                .Where(c => c.Redshift.HasValue && c.MassSz.HasValue &&
+                            c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
+                .ToList();
+            nPsz2 = points.Count;
+
+            var overlayPoints = _overlayClusters
+                .Where(c => c.Snr.HasValue && c.Snr.Value >= snrMin)
+                .Where(c => c.Redshift.HasValue && c.Redshift.Value > 0 && c.MassSz.HasValue &&
+                            c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
+                .ToList();
+            var overlayPoints2 = _overlayClusters2
+                .Where(c => c.Snr.HasValue && c.Snr.Value >= snrMin)
+                .Where(c => c.Redshift.HasValue && c.Redshift.Value > 0 && c.MassSz.HasValue &&
+                            c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
+                .ToList();
+
+            bool comparable = ComparableOverlayCheckBox?.IsChecked == true && points.Count > 0;
+            if (comparable)
+            {
+                double psz2ZMin = points.Min(c => c.Redshift!.Value);
+                double psz2ZMax = points.Max(c => c.Redshift!.Value);
+                double psz2MMin = points.Min(c => c.MassSz!.Value);
+                double psz2MMax = points.Max(c => c.MassSz!.Value);
+                overlayPoints = overlayPoints
+                    .Where(c => c.Redshift!.Value >= psz2ZMin && c.Redshift.Value <= psz2ZMax &&
+                                c.MassSz!.Value >= psz2MMin && c.MassSz.Value <= psz2MMax)
+                    .ToList();
+                overlayPoints2 = overlayPoints2
+                    .Where(c => c.Redshift!.Value >= psz2ZMin && c.Redshift.Value <= psz2ZMax &&
+                                c.MassSz!.Value >= psz2MMin && c.MassSz.Value <= psz2MMax)
+                    .ToList();
+            }
+            nOverlay1 = overlayPoints.Count;
+            nOverlay2 = overlayPoints2.Count;
         }
         private IEnumerable<ClusterRecord> GetFilteredSample()
         {
@@ -496,6 +716,9 @@ namespace PSZ2Explorer
                     break;
                 case "SkyMapZ":
                     PlotSkyMapAitoff(colorByRedshift: true);
+                    break;
+                case "ScatterYvsM_Erosita":
+                    PlotYvsM_ErositaCrossMatch();
                     break;
             }
         }
@@ -870,26 +1093,26 @@ namespace PSZ2Explorer
         /// <summary>§3.4.5 tesi: relazione Y–M in scala log-log (power law → retta). Fit: log Y = A + α log M.</summary>
         private void PlotY5R500MassScatter()
         {
-            // Solo punti con y5r500 nel range fisico (0.001–0.05): esclude righe mis-parse o CSV con colonne sbagliate
+            // Solo punti nel range fisico y5r500 (10⁻⁶–0,05) e massa nel range: si escludono valori incompatibili
             var points = _filteredClusters
-                .Where(c => c.Y5R500.HasValue && c.Y5R500.Value >= Y5R500PhysMin && c.Y5R500.Value <= Y5R500PhysMax &&
+                .Where(c => c.Y5R500.HasValue && c.Y5R500.Value >= Y5R500PlotMin && c.Y5R500.Value <= Y5R500PlotMax &&
                             c.MassSz.HasValue && c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax)
                 .ToList();
             if (points.Count == 0)
             {
                 int conY5 = _filteredClusters.Count(c => c.Y5R500.HasValue);
-                int conY5InRange = _filteredClusters.Count(c => c.Y5R500.HasValue && c.Y5R500.Value >= Y5R500PhysMin && c.Y5R500.Value <= Y5R500PhysMax);
                 string hint = conY5 == 0
-                    ? "Il CSV deve contenere la colonna 'y5r500' (parametro Compton entro 5 R₅₀₀). Verificare nome colonna e separatore decimale (virgola/punto)."
-                    : conY5InRange == 0
-                        ? "Nessun punto con y5r500 nel range 10⁻⁶–0,2. Verificare che si usi la colonna y5r500 (non y5r500_error) e che i decimali usino la virgola."
-                        : "Nessun punto con sia y5r500 che massa nel range. Verificare filtri (SNR, campione cosmologico) e range massa 0,1–50.";
+                    ? "Caricare il catalogo PSZ2 (Catalogo.csv) come catalogo principale."
+                    : "Nessun punto con y5r500 in 10⁻⁶–0,05 e massa nel range. Verificare filtri (SNR, campione cosmologico).";
                 PlotView.Model = new PlotModel
                 {
                     Title = "y_{5R500} vs Massa SZ — Nessun dato. " + hint
                 };
                 return;
             }
+
+            // Per il fit usiamo solo punti nel range fisico (10⁻⁶–0,05)
+            var pointsForFit = points.Where(c => c.Y5R500!.Value >= Y5R500PhysMin && c.Y5R500.Value <= Y5R500PhysMax).ToList();
 
             double mMin = points.Min(c => c.MassSz!.Value);
             double mMax = points.Max(c => c.MassSz!.Value);
@@ -900,16 +1123,16 @@ namespace PSZ2Explorer
 
             var model = new PlotModel { Title = "y_{5R500} vs Massa SZ (Y–M, log-log)" };
 
-            // Scala log-log: power law Y ∝ M^α diventa retta
+            // Asse X = Massa (M), Asse Y = y5r500 (Y). Così la retta di fit Y ∝ M^α ha pendenza positiva (α ≈ 1.79 Planck).
             model.Axes.Add(new LogarithmicAxis
             {
                 Position = AxisPosition.Bottom,
-                Title = "y_{5R500}"
+                Title = "M_{500}^{SZ} [10^{14} M_\\odot]"
             });
             model.Axes.Add(new LogarithmicAxis
             {
                 Position = AxisPosition.Left,
-                Title = "M_{500}^{SZ} [10^{14} M_\\odot]"
+                Title = "y_{5R500}"
             });
 
             var colorAxis = new OxyPlot.Axes.LinearColorAxis
@@ -929,17 +1152,18 @@ namespace PSZ2Explorer
                 MarkerType = MarkerType.Circle,
                 MarkerSize = 3,
                 ColorAxisKey = "MassColor",
-                TrackerFormatString = "y_5R500 = {1:0.00000}\nM_500^SZ = {2:0.00} × 10^14 M_sun"
+                TrackerFormatString = "M_500^SZ = {1:0.00} × 10^14 M_sun\ny_5R500 = {2:0.00000}"
             };
 
             foreach (var c in points)
-                scatter.Points.Add(new ScatterPoint(c.Y5R500!.Value, c.MassSz!.Value, 3, c.MassSz.Value) { Tag = c.Name });
+                scatter.Points.Add(new ScatterPoint(c.MassSz!.Value, c.Y5R500!.Value, 3, c.MassSz.Value) { Tag = c.Name });
 
             model.Series.Add(scatter);
 
-            // Regressione lineare su log10(Y) vs log10(M): log10(Y) = A + α*log10(M)
-            var logY = points.Select(c => Math.Log10(c.Y5R500!.Value)).ToList();
-            var logM = points.Select(c => Math.Log10(c.MassSz!.Value)).ToList();
+            // Regressione lineare: usa punti nel range fisico se ce ne sono abbastanza, altrimenti tutti i punti
+            var fitSource = pointsForFit.Count >= 3 ? pointsForFit : points;
+            var logY = fitSource.Select(c => Math.Log10(c.Y5R500!.Value)).ToList();
+            var logM = fitSource.Select(c => Math.Log10(c.MassSz!.Value)).ToList();
             int n = logY.Count;
             double meanLogY = logY.Average();
             double meanLogM = logM.Average();
@@ -953,6 +1177,7 @@ namespace PSZ2Explorer
                 sp += dm * dy;
             }
             double alpha = ssM > 0 ? sp / ssM : 0;  // pendenza
+            double alphaObs = alpha;
             double intercept = meanLogY - alpha * meanLogM;  // log10(Y0)
             double ssRes = 0;
             for (int i = 0; i < n; i++)
@@ -963,11 +1188,24 @@ namespace PSZ2Explorer
             }
             double r2 = (ssY > 0) ? 1 - ssRes / ssY : 0;
             double rmsLog = n > 0 ? Math.Sqrt(ssRes / n) : 0;
+            double sigmaRes = n > 2 ? Math.Sqrt(ssRes / (n - 2)) : 0;
+            double alphaErr = (n > 2 && ssM > 0) ? sigmaRes / Math.Sqrt(ssM) : 0;
 
-            // Retta di fit in spazio (Y, M): Y = 10^intercept * M^alpha
+            // Se α è negativo (non fisico), usiamo una retta di riferimento con α = 1,79 (Planck) ancorata alla mediana del campione
+            const double planckAlpha = 1.79;
+            bool useReferenceLine = alpha < 0;
+            if (useReferenceLine)
+            {
+                double medLogM = logM.OrderBy(x => x).Skip(n / 2).First();
+                double medLogY = logY.OrderBy(x => x).Skip(n / 2).First();
+                alpha = planckAlpha;
+                intercept = medLogY - alpha * medLogM;
+            }
+
+            // Retta di fit (o di riferimento): Y = 10^intercept * M^alpha → in grafico (M, Y) con M in ascissa
             var fitLine = new LineSeries
             {
-                Title = "fit: log Y = A + α log M",
+                Title = useReferenceLine ? "riferimento fisico: α = 1,79 (Planck)" : "fit: log Y = A + α log M",
                 Color = OxyColors.DarkOrange,
                 StrokeThickness = 2
             };
@@ -976,18 +1214,243 @@ namespace PSZ2Explorer
             {
                 double m = mMin * Math.Pow(mMax / mMin, (double)i / numSeg);
                 double yFit = Math.Pow(10, intercept) * Math.Pow(m, alpha);
-                fitLine.Points.Add(new DataPoint(yFit, m));
+                fitLine.Points.Add(new DataPoint(m, yFit));
             }
             model.Series.Add(fitLine);
 
-            // Legenda: retta arancione = fit log Y = A + α log M. Se α≈0 la retta è ~verticale (Y≈cost).
-            string fitText = string.Format(CultureInfo.InvariantCulture,
-                "Retta di fit (arancione): log Y = A + α log M\nα = {0:F3}   R² = {1:F3}   σ(log Y) = {2:F3} dex",
-                alpha, r2, rmsLog);
+            string fitText = useReferenceLine
+                ? string.Format(CultureInfo.InvariantCulture,
+                    "α_obs = {0:F2} ± {1:F2} (non fisico). Retta di riferimento: α = 1,79 (Planck), ancorata al campione.\nR² (fit ai dati) = {2:F3}   σ(log Y) = {3:F3} dex",
+                    alphaObs, alphaErr, r2, rmsLog)
+                : string.Format(CultureInfo.InvariantCulture,
+                    "Fit: log Y = A + α log M →  α_obs = {0:F2} ± {1:F2}   (Planck: α = 1.79 ± 0.08)\nR² = {2:F3}   σ(log Y) = {3:F3} dex",
+                    alpha, alphaErr, r2, rmsLog);
+            if (pointsForFit.Count < points.Count && pointsForFit.Count > 0)
+                fitText += "\n(Punti in range 10⁻⁶–0,05.)";
+            // Posizione annotazione: in alto a sinistra (mMin, yMax)
             model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
             {
                 Text = fitText,
-                TextPosition = new DataPoint(yMin, mMax * 0.85),
+                TextPosition = new DataPoint(mMin, yMax * 0.85),
+                TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
+                TextVerticalAlignment = OxyPlot.VerticalAlignment.Top,
+                FontSize = 11,
+                TextColor = OxyColors.DarkOrange
+            });
+
+            PlotView.Model = model;
+        }
+
+        /// <summary>Cross-match PSZ2–eROSITA: Y_5R500 (PSZ2, entro 5R500) vs M_500^X (eROSITA/eROCOP). Attenzione: non è la relazione Y_500–M calibrata da Planck (aperture e observabili diverse); con N piccolo la pendenza può essere non fisica.</summary>
+        private void PlotYvsM_ErositaCrossMatch()
+        {
+            var psz2 = _filteredClusters
+                .Where(c => c.Y5R500.HasValue && c.Y5R500.Value >= Y5R500PlotMin && c.Y5R500.Value <= Y5R500PlotMax &&
+                            c.Ra.HasValue && c.Dec.HasValue && c.Redshift.HasValue)
+                .ToList();
+            var erossita = _overlayClusters2
+                .Where(c => c.MassSz.HasValue && c.MassSz.Value >= ScatterMassMin && c.MassSz.Value <= ScatterMassMax &&
+                            c.Ra.HasValue && c.Dec.HasValue && c.Redshift.HasValue)
+                .ToList();
+
+            if (psz2.Count == 0)
+            {
+                PlotView.Model = new PlotModel
+                {
+                    Title = "Y (PSZ2) vs M (eROSITA) cross-match — Caricare Catalogo.csv come catalogo principale con Y_{{5R500}} e coordinate RA/Dec e redshift valide."
+                };
+                return;
+            }
+            if (erossita.Count == 0)
+            {
+                PlotView.Model = new PlotModel
+                {
+                    Title = "Y (PSZ2) vs M (eROSITA) cross-match — Caricare eROSITA (es. asu.tsv) come Overlay 2 con M500, coordinate RA/Dec e redshift (zBest) valide."
+                };
+                return;
+            }
+
+            var pairs = new List<(double Y5R500, double M500)>();
+
+            // Mutual nearest neighbour: A sceglie B e B sceglie A → match affidabile
+            int[] nearestErositaForPsz2 = new int[psz2.Count];
+            int[] nearestPsz2ForErosita = new int[erossita.Count];
+            double[] distPsz2ToErosita = new double[psz2.Count];
+            double[] distErositaToPsz2 = new double[erossita.Count];
+            for (int i = 0; i < psz2.Count; i++)
+            {
+                nearestErositaForPsz2[i] = -1;
+                distPsz2ToErosita[i] = double.MaxValue;
+                var p = psz2[i];
+                double raP = p.Ra!.Value, decP = p.Dec!.Value, zP = p.Redshift!.Value;
+                for (int j = 0; j < erossita.Count; j++)
+                {
+                    var e = erossita[j];
+                    if (Math.Abs(zP - e.Redshift!.Value) > CrossMatchMaxDz) continue;
+                    double deg = AngularSeparationDeg(raP, decP, e.Ra!.Value, e.Dec!.Value);
+                    if (deg < distPsz2ToErosita[i] && deg <= CrossMatchRadiusDeg)
+                    {
+                        distPsz2ToErosita[i] = deg;
+                        nearestErositaForPsz2[i] = j;
+                    }
+                }
+            }
+            for (int j = 0; j < erossita.Count; j++)
+            {
+                nearestPsz2ForErosita[j] = -1;
+                distErositaToPsz2[j] = double.MaxValue;
+                var e = erossita[j];
+                double raE = e.Ra!.Value, decE = e.Dec!.Value, zE = e.Redshift!.Value;
+                for (int i = 0; i < psz2.Count; i++)
+                {
+                    var p = psz2[i];
+                    if (Math.Abs(p.Redshift!.Value - zE) > CrossMatchMaxDz) continue;
+                    double deg = AngularSeparationDeg(raE, decE, p.Ra!.Value, p.Dec!.Value);
+                    if (deg < distErositaToPsz2[j] && deg <= CrossMatchRadiusDeg)
+                    {
+                        distErositaToPsz2[j] = deg;
+                        nearestPsz2ForErosita[j] = i;
+                    }
+                }
+            }
+            for (int i = 0; i < psz2.Count; i++)
+            {
+                int j = nearestErositaForPsz2[i];
+                if (j < 0) continue;
+                if (nearestPsz2ForErosita[j] != i) continue;
+                var p = psz2[i];
+                var e = erossita[j];
+                if (Math.Abs(p.Redshift!.Value - e.Redshift!.Value) > CrossMatchMaxDz) continue;
+                pairs.Add((p.Y5R500!.Value, e.MassSz!.Value));
+            }
+
+            if (pairs.Count == 0)
+            {
+                PlotView.Model = new PlotModel
+                {
+                    Title = "Y (PSZ2) vs M (eROSITA) cross-match — Nessuna coppia (mutual NN, |Δz|≤0.02, entro " + (CrossMatchRadiusDeg * 60).ToString("F0", CultureInfo.InvariantCulture) + " arcmin). Richiesto redshift su entrambi i cataloghi."
+                };
+                return;
+            }
+
+            double mMin = pairs.Min(x => x.M500);
+            double mMax = pairs.Max(x => x.M500);
+            if (mMax <= mMin) mMax = mMin + 0.1;
+            double yMin = pairs.Min(x => x.Y5R500);
+            double yMax = pairs.Max(x => x.Y5R500);
+            if (yMax <= yMin) yMax = yMin * 1.1;
+
+            var model = new PlotModel { Title = "Y_{{5R500}} (PSZ2) vs M_{{500}}^{{X}} (eROSITA) — cross-match log-log" };
+            model.Axes.Add(new LogarithmicAxis { Position = AxisPosition.Bottom, Title = "M_{{500}}^{{X}} [10^{{14}} M_\\odot] (eROSITA, eROCOP)" });
+            model.Axes.Add(new LogarithmicAxis { Position = AxisPosition.Left, Title = "Y_{{5R500}} (PSZ2, integrale entro 5R_{{500}})" });
+
+            var scatter = new ScatterSeries
+            {
+                MarkerType = MarkerType.Circle,
+                MarkerSize = 4,
+                MarkerFill = OxyColors.DarkBlue,
+                MarkerStroke = OxyColors.White,
+                TrackerFormatString = "M_500^X = {1:0.00} × 10^14 M_\\odot\nY_5R500 = {2:0.00000}"
+            };
+            foreach (var (y, m) in pairs)
+                scatter.Points.Add(new ScatterPoint(m, y));
+            model.Series.Add(scatter);
+
+            var logY = pairs.Select(x => Math.Log10(x.Y5R500)).ToList();
+            var logM = pairs.Select(x => Math.Log10(x.M500)).ToList();
+            int n = logY.Count;
+            double meanLogY = logY.Average();
+            double meanLogM = logM.Average();
+            double ssM = 0, ssY = 0, sp = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double dm = logM[i] - meanLogM;
+                double dy = logY[i] - meanLogY;
+                ssM += dm * dm;
+                ssY += dy * dy;
+                sp += dm * dy;
+            }
+            double alpha = ssM > 0 ? sp / ssM : 0;
+            double intercept = meanLogY - alpha * meanLogM;
+            double ssRes = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double pred = intercept + alpha * logM[i];
+                ssRes += (logY[i] - pred) * (logY[i] - pred);
+            }
+            double r2 = ssY > 0 ? 1 - ssRes / ssY : 0;
+            double sigmaRes = n > 2 ? Math.Sqrt(ssRes / (n - 2)) : 0;
+            double alphaErr = (n > 2 && ssM > 0) ? sigmaRes / Math.Sqrt(ssM) : 0;
+
+            const double planckAlpha = 1.79;
+            double alphaObs = alpha;
+            bool useReferenceLine = alpha < 0;
+            double interceptObs = intercept;
+            if (useReferenceLine)
+            {
+                double medLogM = logM.OrderBy(x => x).Skip(n / 2).First();
+                double medLogY = logY.OrderBy(x => x).Skip(n / 2).First();
+                alpha = planckAlpha;
+                intercept = medLogY - alpha * medLogM;
+            }
+
+            // Quando α_obs < 0 mostriamo anche la retta di fit ai dati (tratteggiata) per confronto
+            if (useReferenceLine)
+            {
+                var fitObsLine = new LineSeries
+                {
+                    Title = "fit ai dati (α_obs non fisico)",
+                    Color = OxyColors.Gray,
+                    StrokeThickness = 1.5,
+                    LineStyle = LineStyle.Dash
+                };
+                for (int i = 0; i <= 50; i++)
+                {
+                    double m = mMin * Math.Pow(mMax / mMin, (double)i / 50);
+                    double yFit = Math.Pow(10, interceptObs) * Math.Pow(m, alphaObs);
+                    fitObsLine.Points.Add(new DataPoint(m, yFit));
+                }
+                model.Series.Add(fitObsLine);
+            }
+
+            var fitLine = new LineSeries
+            {
+                Title = useReferenceLine
+                ? "riferimento indicativo: α = 1,79 (Planck Y_{{500}}–M, scaling E(z)^{{-2/3}} D_A^2; non direttamente applicabile qui)"
+                : "fit: log Y = A + α log M",
+                Color = OxyColors.DarkOrange,
+                StrokeThickness = 2
+            };
+            int numSeg = 50;
+            for (int i = 0; i <= numSeg; i++)
+            {
+                double m = mMin * Math.Pow(mMax / mMin, (double)i / numSeg);
+                double yFit = Math.Pow(10, intercept) * Math.Pow(m, alpha);
+                fitLine.Points.Add(new DataPoint(m, yFit));
+            }
+            model.Series.Add(fitLine);
+
+            // Avviso fisico: definizioni diverse da Planck → confronto non diretto
+            model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
+            {
+                Text = "⚠ Confronto non omogeneo con Planck:\n• PSZ2 fornisce solo Y_{{5R500}} (integrale entro 5R₅₀₀); Planck calibra Y₅₀₀ (entro R₅₀₀, scaling E(z)^{{-2/3}} D_A^2).\n• eROSITA M₅₀₀ = massa X da eROCOP; relazione Planck è Y₅₀₀–M (stessa apertura). Il valore α ≈ 1,79 non è direttamente applicabile qui.\n• Con aperture/observabili diverse + N piccolo + dispersione, α_obs può essere non fisico; R² basso.",
+                TextPosition = new DataPoint(mMin, yMin),
+                TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
+                TextVerticalAlignment = OxyPlot.VerticalAlignment.Bottom,
+                FontSize = 9,
+                TextColor = OxyColors.DarkRed
+            });
+
+            model.Annotations.Add(new OxyPlot.Annotations.TextAnnotation
+            {
+                Text = useReferenceLine
+                    ? string.Format(CultureInfo.InvariantCulture,
+                        "N = {0} (1:1, mutual NN, |Δz|≤0.02)   α_obs = {1:F2} ± {2:F2} (non fisico) → retta riferimento Planck (Y₅₀₀–M scalato; non Y_{{5R500}}–M_X)\nR² = {3:F3}   (campione piccolo, fit non robusto)",
+                        pairs.Count, alphaObs, alphaErr, r2)
+                    : string.Format(CultureInfo.InvariantCulture,
+                        "N = {0} (1:1, mutual NN, |Δz|≤0.02)   Fit: α = {1:F2} ± {2:F2}   R² = {3:F3}\n(Planck Y₅₀₀–M scalato: α ≈ 1.79; qui Y_{{5R500}} vs M₅₀₀^X)",
+                        pairs.Count, alpha, alphaErr, r2),
+                TextPosition = new DataPoint(mMin, yMax * 0.85),
                 TextHorizontalAlignment = OxyPlot.HorizontalAlignment.Left,
                 TextVerticalAlignment = OxyPlot.VerticalAlignment.Top,
                 FontSize = 11,
@@ -1039,7 +1502,7 @@ namespace PSZ2Explorer
                 MarkerType = MarkerType.Circle,
                 MarkerSize = 3,
                 ColorAxisKey = "MassColor",
-                TrackerFormatString = "Nome: {Tag}\nz = {2:0.000}\ny_{5R500} = {4:0.00000}\nM = {6:0.00} ×10^14 M_⊙"
+                TrackerFormatString = "Nome: {Tag}\nz = {2:0.000}\ny_{{5R500}} = {4:0.00000}\nM = {6:0.00} ×10^14 M_⊙"
             };
             double mMin = colorAxis.Minimum;
             double mMax = colorAxis.Maximum;
