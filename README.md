@@ -13,8 +13,14 @@ Applicazione desktop **WPF** (.NET 8) per esplorare cataloghi di ammassi di gala
 Grafico **Massa SZ vs redshift**: scatter in scala logaritmica sulla massa; i punti sono colorati in base a M₅₀₀^SZ (barra colori a destra). Permette il confronto tra PSZ2 e overlay (ACT, eROSITA).
 
 ![Massa SZ vs redshift](docs/massa-vs-redshift.png)
+<img width="837" height="341" alt="image" src="https://github.com/user-attachments/assets/8b088a2f-7486-47eb-86bf-5dedd6382d3e" />
+
+<img width="817" height="523" alt="image" src="https://github.com/user-attachments/assets/349653bf-4a72-40ac-a584-2ec394eb5a5f" />
+<img width="1297" height="846" alt="image" src="https://github.com/user-attachments/assets/e82ba838-8f8b-4420-8abe-7cf0fc2e49af" />
+
 
 *Massa SZ vs redshift — asse z (redshift), asse y M₅₀₀ [10¹⁴ M☉]; colore per massa.*
+<img width="1012" height="714" alt="image" src="https://github.com/user-attachments/assets/a9230958-a90e-4de1-bcea-7ee510b745a7" />
 
 ---
 
